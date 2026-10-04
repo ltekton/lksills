@@ -59,6 +59,9 @@ fn dispatch(cli: &Cli) -> lskills_core::Result<i32> {
     }
 
     let root = resolve_source(cli)?;
+    if cli.repo.is_none() {
+        bundle_import::recover(&root)?;
+    }
 
     // Scaffold verbs write source files into the root directly; they operate on
     // the raw root (which may not yet be a loadable repo), so run before load.
@@ -96,6 +99,7 @@ fn dispatch(cli: &Cli) -> lskills_core::Result<i32> {
         | Command::RmSkill { .. }
         | Command::RmBundle { .. } => unreachable!("handled before repo load"),
         Command::Publish { check } => {
+            let _provenance = load_provenance(&repo)?;
             let result = if *check {
                 publish::check(&repo, TOOL_VERSION)?
             } else {
@@ -217,11 +221,14 @@ fn dispatch_import(
         .ok_or_else(|| Error::Usage("import requires --root <WORKAREA>".into()))?;
     let root = resolve_root(Some(root));
     let bundle = BundleName::parse(bundle.to_string())?;
-    let resolved = resolve_import_origin(origin, cli)?;
+    let resolved = resolve_import_origin(origin, cli, &root)?;
     let origin_info = bundle_import::OriginInfo {
         locator: origin.to_string(),
         resolved_revision: resolved.revision,
     };
+    if !check {
+        bundle_import::recover(&root)?;
+    }
     let plan = bundle_import::plan(&resolved.repo, &root, &bundle, &origin_info)?;
     let result = if check {
         plan.preview()
@@ -238,7 +245,11 @@ struct ResolvedImportOrigin {
 }
 
 /// Resolve a positional origin as a local path first, then as a Git spec.
-fn resolve_import_origin(origin: &str, cli: &Cli) -> lskills_core::Result<ResolvedImportOrigin> {
+fn resolve_import_origin(
+    origin: &str,
+    cli: &Cli,
+    destination: &std::path::Path,
+) -> lskills_core::Result<ResolvedImportOrigin> {
     if origin.trim().is_empty() {
         return Err(Error::Usage("import origin must not be empty".into()));
     }
@@ -251,6 +262,7 @@ fn resolve_import_origin(origin: &str, cli: &Cli) -> lskills_core::Result<Resolv
     };
     if local.exists() {
         bundle_import::validate_source_tree(&local)?;
+        bundle_import::ensure_roots_disjoint(&local, destination)?;
         let repo = Repo::load(&local)?;
         let revision = git::head(&local)?.map(|head| format!("git:{head}"));
         return Ok(ResolvedImportOrigin { repo, revision });
@@ -258,7 +270,10 @@ fn resolve_import_origin(origin: &str, cli: &Cli) -> lskills_core::Result<Resolv
 
     let spec = remote::RepoSpec::parse(origin)?;
     let cache = dirs::cache_dir(cli.cache_dir.as_deref(), |k| std::env::var(k).ok())?;
+    let cache_path = remote::cache_path(&spec, &cache);
+    bundle_import::ensure_roots_disjoint(&cache_path, destination)?;
     let path = remote::resolve(&spec, &cache, cli.refresh)?;
+    bundle_import::ensure_roots_disjoint(&path, destination)?;
     bundle_import::validate_source_tree(&path)?;
     let repo = Repo::load(&path)?;
     let head = git::head(&path)?.ok_or_else(|| Error::Command {
@@ -398,6 +413,9 @@ fn print_import(result: &bundle_import::ImportResult) {
         .join(", ");
     println!("  skills: {skills}");
     println!("  files: {}", result.files.len());
+    for file in &result.files {
+        println!("    {file}");
+    }
 }
 
 /// Human summary of a publish run.

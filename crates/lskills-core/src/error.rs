@@ -87,7 +87,25 @@ pub enum Error {
         path: PathBuf,
     },
 
-    /// The skills-root was missing or not a directory.
+    /// The origin does not satisfy the skills-root source contract.
+    #[error("invalid source {path:?}: {reason}")]
+    Source {
+        /// The source path.
+        path: PathBuf,
+        /// Why the source is invalid.
+        reason: String,
+    },
+
+    /// The import source and destination overlap.
+    #[error("import origin {origin:?} overlaps destination {destination:?}")]
+    ImportRootsOverlap {
+        /// The origin root.
+        origin: PathBuf,
+        /// The destination workarea.
+        destination: PathBuf,
+    },
+
+    /// A skills root was missing or not a directory.
     #[error("skills root {path:?} is not a directory")]
     NotARoot {
         /// The candidate root.
@@ -137,6 +155,8 @@ impl Error {
             Error::Config { .. } => "config",
             Error::Provenance { .. } => "provenance",
             Error::ImportCollision { .. } => "import_collision",
+            Error::Source { .. } => "source",
+            Error::ImportRootsOverlap { .. } => "import_roots_overlap",
             Error::NotARoot { .. } => "not_a_root",
             Error::Usage(_) => "usage",
             Error::Command { .. } => "command",

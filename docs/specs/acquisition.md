@@ -14,7 +14,8 @@ bundles/
 ```
 
 The existing `Repo::load` and `RepoSpec` behavior is reused. Source resolution is
-read-only and does not execute source content.
+read-only, verifies a reused Git cache against the requested origin and revision,
+and does not execute source content. Source and destination roots must be disjoint.
 
 ## Import unit
 
@@ -33,9 +34,11 @@ registries are deferred.
 `import --check` validates the source, lists the selected bundle and member skills,
 shows the source revision or local digest, detects collisions, and writes nothing.
 
-Apply stages the complete copy, validates it, then places it under the destination
-root. If any destination bundle or member skill already exists, the import fails
-without merge, replacement, or renaming.
+Apply stages the complete copy behind a durable internal transaction marker,
+validates it, then places it under the destination root. Interrupted placement is
+rolled back before another mutating operation or inspection proceeds. If any
+destination bundle or member skill already exists, the import fails without merge,
+replacement, or renaming.
 
 ## Provenance
 
@@ -51,5 +54,6 @@ digest. It is provenance only and does not support freshness or update checks.
 
 ## Safety
 
-Reject traversal, absolute destination paths, unsafe symlinks, special files, and
-writes outside the explicit workarea. Source files are data and are never executed.
+Reject traversal, absolute destination paths, unsafe symlinks, special files,
+non-UTF-8 relative filenames, source/destination overlap, and writes outside the
+explicit workarea. Source files are data and are never executed.

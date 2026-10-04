@@ -3,6 +3,8 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use walkdir::WalkDir;
+
 use crate::error::{Error, Result};
 use crate::frontmatter;
 use crate::model::{Bundle, Skill};
@@ -43,6 +45,7 @@ impl Repo {
             });
         }
 
+        validate_tree(root)?;
         let skills = load_skills(&root.join("skills"))?;
         let bundles = load_bundles(&root.join("bundles"))?;
 
@@ -52,6 +55,75 @@ impl Repo {
             bundles,
         })
     }
+}
+
+/// Validate the filesystem kinds under the source-of-truth directories.
+///
+/// Missing `skills/` or `bundles/` directories remain acceptable to the generic
+/// loader for legacy scaffolding, but existing entries must be ordinary
+/// directories and regular files. Import applies the stricter source contract
+/// separately.
+pub fn validate_tree(root: &Path) -> Result<()> {
+    let root_metadata = std::fs::symlink_metadata(root).map_err(|e| Error::io(root, e))?;
+    if root_metadata.file_type().is_symlink() || !root_metadata.is_dir() {
+        return Err(Error::NotARoot {
+            path: root.to_path_buf(),
+        });
+    }
+    for name in ["skills", "bundles"] {
+        let directory = root.join(name);
+        let metadata = match std::fs::symlink_metadata(&directory) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(Error::io(&directory, error)),
+        };
+        if metadata.file_type().is_symlink() {
+            return Err(Error::PathEscape {
+                path: directory,
+                root: root.to_path_buf(),
+            });
+        }
+        if !metadata.is_dir() {
+            return Err(Error::io(
+                &directory,
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "skills-root entry is not a directory",
+                ),
+            ));
+        }
+        for entry in WalkDir::new(&directory).follow_links(false) {
+            let entry = entry.map_err(|error| {
+                let path = error.path().unwrap_or(&directory).to_path_buf();
+                Error::io(
+                    path,
+                    error
+                        .into_io_error()
+                        .unwrap_or_else(|| std::io::Error::other("walk error")),
+                )
+            })?;
+            let file_type = entry.file_type();
+            if entry.file_name().to_str().is_none() {
+                return Err(Error::io(
+                    entry.path(),
+                    std::io::Error::new(std::io::ErrorKind::InvalidData, "non-UTF-8 filename"),
+                ));
+            }
+            if file_type.is_symlink() {
+                return Err(Error::PathEscape {
+                    path: entry.path().to_path_buf(),
+                    root: directory.clone(),
+                });
+            }
+            if !file_type.is_file() && !file_type.is_dir() {
+                return Err(Error::io(
+                    entry.path(),
+                    std::io::Error::new(std::io::ErrorKind::InvalidData, "special file"),
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Load every `skills/<name>/` directory, sorted by directory name.

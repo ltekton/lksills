@@ -38,11 +38,13 @@ An import must:
 
 1. require an explicit destination root;
 2. resolve one local or Git source;
-3. validate one bundle and all referenced skills;
-4. check every destination collision before writing;
-5. stage the complete copy;
-6. install the bundle and member skills together;
-7. record provenance after success.
+3. verify the source and destination roots are disjoint;
+4. validate one bundle and all referenced skills;
+5. check every destination collision before writing;
+6. stage the complete copy behind a recovery marker;
+7. install the bundle and member skills together;
+8. record provenance after success;
+9. recover interrupted placement before another workarea operation proceeds.
 
 A failed import must not leave a partial selected bundle or successful provenance
 entry.

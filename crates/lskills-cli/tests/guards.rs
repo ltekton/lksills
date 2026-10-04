@@ -122,6 +122,27 @@ fn symlink_under_skill_is_rejected_on_publish() {
     assert_eq!(error_code(&v), "path_escape");
 }
 
+#[cfg(unix)]
+#[test]
+fn special_file_under_skill_is_rejected_before_validation() {
+    let (_tmp, root) = copy_fixture("valid");
+    let fifo = root.join("skills/demo-hello/fifo");
+    let status = Command::new("mkfifo").arg(&fifo).status().unwrap();
+    if !status.success() {
+        eprintln!("skipping: mkfifo unavailable");
+        return;
+    }
+    let assert = lskills(&root)
+        .arg("--json")
+        .arg("validate")
+        .assert()
+        .failure()
+        .code(1);
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    let value: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(error_code(&value), "io");
+}
+
 // --- Drift: a committed-but-stale generated tree. `publish --check` reports the
 // --- Changed + Extra entries and exits 1.
 

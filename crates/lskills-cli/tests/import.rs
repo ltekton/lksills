@@ -55,6 +55,20 @@ fn import_check_does_not_write_the_workarea() {
 }
 
 #[test]
+fn import_rejects_a_destination_inside_the_origin() {
+    let (_source_guard, source) = common::copy_fixture("valid");
+    let workarea = source.join("nested-workarea");
+
+    common::lskills(&workarea)
+        .args(["import", source.to_str().unwrap(), "--bundle", "demo"])
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicate::str::contains("overlaps destination"));
+    assert!(!workarea.exists());
+}
+
+#[test]
 fn import_rejects_an_unknown_source_bundle() {
     let (_source_guard, source) = common::copy_fixture("valid");
     let workarea = TempDir::new().unwrap();
@@ -64,6 +78,21 @@ fn import_rejects_an_unknown_source_bundle() {
         .assert()
         .failure()
         .code(2);
+    assert!(workarea.path().read_dir().unwrap().next().is_none());
+}
+
+#[test]
+fn import_rejects_an_origin_without_both_root_directories() {
+    let (_source_guard, source) = common::copy_fixture("valid");
+    fs::remove_dir_all(source.join("bundles")).unwrap();
+    let workarea = TempDir::new().unwrap();
+
+    common::lskills(workarea.path())
+        .args(["import", source.to_str().unwrap(), "--bundle", "demo"])
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicate::str::contains("missing required bundles/"));
     assert!(workarea.path().read_dir().unwrap().next().is_none());
 }
 
@@ -182,12 +211,30 @@ fn inspection_rejects_dangling_provenance_entries() {
         .failure()
         .code(1)
         .stderr(predicate::str::contains("missing bundle"));
+    common::lskills(workarea.path())
+        .args(["import", source.to_str().unwrap(), "--bundle", "only"])
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicate::str::contains("missing bundle"));
+    common::lskills(workarea.path())
+        .args(["publish", "--check"])
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicate::str::contains("missing bundle"));
 }
 
 #[test]
 fn importing_two_origins_into_one_workarea_keeps_both_provenance_entries() {
     let (_source_a_guard, source_a) = common::copy_fixture("valid");
     let (_source_b_guard, source_b) = common::copy_fixture("valid");
+    let source_b_skill = source_b.join("skills/only-codex-tool/SKILL.md");
+    let contents = fs::read_to_string(&source_b_skill).unwrap().replace(
+        "A codex-only skill.",
+        "A distinct codex-only skill from origin B.",
+    );
+    fs::write(source_b_skill, contents).unwrap();
     let workarea = TempDir::new().unwrap();
 
     common::lskills(workarea.path())
@@ -205,6 +252,11 @@ fn importing_two_origins_into_one_workarea_keeps_both_provenance_entries() {
     assert_eq!(imports.len(), 2);
     assert_eq!(imports[0]["bundle"].as_str(), Some("demo"));
     assert_eq!(imports[1]["bundle"].as_str(), Some("only"));
+    assert!(
+        fs::read_to_string(workarea.path().join("skills/only-codex-tool/SKILL.md"))
+            .unwrap()
+            .contains("distinct codex-only skill")
+    );
 }
 
 #[test]
@@ -309,6 +361,29 @@ fn import_copies_executable_looking_content_without_running_it() {
 
 #[cfg(unix)]
 #[test]
+fn import_rejects_non_utf8_filenames_instead_of_rewriting_them() {
+    use std::os::unix::ffi::OsStringExt;
+
+    let (_source_guard, source) = common::copy_fixture("valid");
+    let name = std::ffi::OsString::from_vec(vec![0x80]);
+    let non_utf8 = source.join("skills/demo-hello").join(name);
+    if let Err(error) = fs::write(&non_utf8, [1_u8, 2, 3]) {
+        eprintln!("skipping: filesystem rejected non-UTF-8 filename: {error}");
+        return;
+    }
+    let workarea = TempDir::new().unwrap();
+
+    common::lskills(workarea.path())
+        .args(["import", source.to_str().unwrap(), "--bundle", "demo"])
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicate::str::contains("non-UTF-8 filename"));
+    assert!(workarea.path().read_dir().unwrap().next().is_none());
+}
+
+#[cfg(unix)]
+#[test]
 fn import_rejects_special_file_content_before_loading_the_source() {
     let (_source_guard, source) = common::copy_fixture("valid");
     let fifo = source.join("skills/demo-hello/fifo");
@@ -404,6 +479,36 @@ fn git_available() -> bool {
         panic!("git is required but unavailable");
     }
     available
+}
+
+#[test]
+fn explicit_root_keeps_the_machinery_repository_unchanged() {
+    if !git_available() {
+        eprintln!("skipping: git not available");
+        return;
+    }
+    let (_source_guard, source) = common::copy_fixture("valid");
+    let workarea = TempDir::new().unwrap();
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    let before = git(
+        repository,
+        &["status", "--porcelain", "--untracked-files=all"],
+    );
+
+    common::lskills(workarea.path())
+        .args(["import", source.to_str().unwrap(), "--bundle", "demo"])
+        .assert()
+        .success();
+
+    let after = git(
+        repository,
+        &["status", "--porcelain", "--untracked-files=all"],
+    );
+    assert_eq!(after, before);
 }
 
 #[test]

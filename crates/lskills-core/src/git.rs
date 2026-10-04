@@ -44,6 +44,24 @@ pub fn head(dir: &Path) -> Result<Option<String>> {
     }
 }
 
+/// Return the configured URL for a named remote, or `None` when it is absent.
+pub fn remote_url(dir: &Path, remote: &str) -> Result<Option<String>> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["remote", "get-url", remote])
+        .output()
+        .map_err(|e| Error::Command {
+            command: "git remote get-url".into(),
+            reason: e.to_string(),
+        })?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    Ok((!value.is_empty()).then_some(value))
+}
+
 /// Stage `paths` (relative to `dir`) and commit them with `message`.
 ///
 /// Fails with [`Error::Command`] if `git add` or `git commit` returns nonzero

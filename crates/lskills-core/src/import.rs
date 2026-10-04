@@ -2,9 +2,10 @@
 
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
-use std::path::{Path, PathBuf};
+use std::io::Write as _;
+use std::path::{Component, Path, PathBuf};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use walkdir::WalkDir;
 
@@ -49,6 +50,32 @@ pub struct ImportPlan {
     source_skills: Vec<(SkillFullName, PathBuf)>,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ImportTransaction {
+    schema: u32,
+    bundle: BundleName,
+    digest: String,
+    phase: TransactionPhase,
+    items: Vec<TransactionItem>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum TransactionPhase {
+    Staging,
+    Ready,
+    Moved,
+    Committed,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct TransactionItem {
+    staged: String,
+    destination: String,
+}
+
 /// The result of previewing or applying an import.
 #[derive(Debug, Clone, Serialize)]
 pub struct ImportResult {
@@ -72,55 +99,321 @@ pub struct ImportResult {
     pub files: Vec<String>,
 }
 
-/// Validate the source paths that `Repo::load` will inspect before loading them.
-///
-/// This keeps import acquisition from following a source symlink or opening a
-/// special file while the existing skills-root loader reads manifests.
+/// Normalize a path lexically and make it absolute without following links.
+fn absolute_lexical(path: &Path) -> Result<PathBuf> {
+    let base = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map_err(|e| Error::io("current directory", e))?
+            .join(path)
+    };
+    let mut normalized = PathBuf::new();
+    for component in base.components() {
+        match component {
+            Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            Component::RootDir => normalized.push(std::path::MAIN_SEPARATOR.to_string()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            Component::Normal(value) => normalized.push(value),
+        }
+    }
+    Ok(normalized)
+}
+
+/// Reject a symlink at the declared root itself. Ancestor links are resolved
+/// for identity checks, but standard system paths such as macOS `/var` may be
+/// links and are not treated as unsafe by themselves.
+fn reject_symlink_root(path: &Path) -> Result<()> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => Err(Error::PathEscape {
+            path: path.to_path_buf(),
+            root: path.to_path_buf(),
+        }),
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(Error::io(path, error)),
+    }
+}
+
+/// Resolve an existing ancestor while preserving the not-yet-created suffix.
+fn canonicalize_with_missing(path: &Path) -> Result<PathBuf> {
+    let absolute = absolute_lexical(path)?;
+    let mut current = absolute.clone();
+    let mut suffix = Vec::new();
+    loop {
+        match std::fs::symlink_metadata(&current) {
+            Ok(_) => {
+                let mut resolved =
+                    std::fs::canonicalize(&current).map_err(|e| Error::io(&current, e))?;
+                for component in suffix.iter().rev() {
+                    resolved.push(component);
+                }
+                return Ok(resolved);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let component = current.file_name().ok_or_else(|| Error::PathEscape {
+                    path: path.to_path_buf(),
+                    root: path.to_path_buf(),
+                })?;
+                suffix.push(component.to_os_string());
+                current.pop();
+            }
+            Err(error) => return Err(Error::io(&current, error)),
+        }
+    }
+}
+
+/// Ensure an import source and destination are disjoint, resolving existing
+/// ancestors while preserving not-yet-created suffixes.
+pub fn ensure_roots_disjoint(source: &Path, destination: &Path) -> Result<()> {
+    let source = canonicalize_with_missing(source)?;
+    let destination = canonicalize_with_missing(destination)?;
+    if source == destination || source.starts_with(&destination) || destination.starts_with(&source)
+    {
+        return Err(Error::ImportRootsOverlap {
+            origin: source,
+            destination,
+        });
+    }
+    Ok(())
+}
+
+/// Validate an origin against the existing skills-root source contract.
 pub fn validate_source_tree(root: &Path) -> Result<()> {
-    let metadata = std::fs::symlink_metadata(root).map_err(|e| Error::io(root, e))?;
+    reject_symlink_root(root)?;
+    crate::repo::validate_tree(root)?;
+    for name in ["skills", "bundles"] {
+        let directory = root.join(name);
+        if !directory.is_dir() {
+            return Err(Error::Source {
+                path: root.to_path_buf(),
+                reason: format!("missing required {name}/ directory"),
+            });
+        }
+    }
+    Ok(())
+}
+
+const TRANSACTION_SCHEMA: u32 = 1;
+
+fn staging_path(root: &Path, bundle: &BundleName) -> PathBuf {
+    root.join(".lskills")
+        .join("staging")
+        .join(format!("import-{}", bundle.as_str()))
+}
+
+fn transaction_path(staging: &Path) -> PathBuf {
+    staging.join("transaction.toml")
+}
+
+fn transaction_error(path: &Path, reason: impl Into<String>) -> Error {
+    Error::Provenance {
+        path: path.to_path_buf(),
+        reason: reason.into(),
+    }
+}
+
+fn write_transaction(staging: &Path, transaction: &ImportTransaction) -> Result<()> {
+    let path = transaction_path(staging);
+    let temp = path.with_extension("toml.tmp");
+    let text = toml::to_string_pretty(transaction)
+        .map_err(|error| transaction_error(&path, error.to_string()))?;
+    if let Ok(metadata) = std::fs::symlink_metadata(&temp) {
+        if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+            return Err(transaction_error(
+                &temp,
+                "temporary transaction path is not a regular file",
+            ));
+        }
+    }
+    let mut file = std::fs::File::create(&temp).map_err(|e| Error::io(&temp, e))?;
+    file.write_all(text.as_bytes())
+        .map_err(|e| Error::io(&temp, e))?;
+    file.sync_all().map_err(|e| Error::io(&temp, e))?;
+    if let Err(error) = std::fs::rename(&temp, &path) {
+        let _ = std::fs::remove_file(&temp);
+        return Err(Error::io(&path, error));
+    }
+    Ok(())
+}
+
+fn read_transaction(staging: &Path) -> Result<ImportTransaction> {
+    let path = transaction_path(staging);
+    let metadata = std::fs::symlink_metadata(&path).map_err(|e| Error::io(&path, e))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(transaction_error(
+            &path,
+            "transaction path is not a regular file",
+        ));
+    }
+    let text = std::fs::read_to_string(&path).map_err(|e| Error::io(&path, e))?;
+    let transaction: ImportTransaction =
+        toml::from_str(&text).map_err(|error| transaction_error(&path, error.to_string()))?;
+    if transaction.schema != TRANSACTION_SCHEMA {
+        return Err(transaction_error(
+            &path,
+            format!(
+                "unsupported transaction schema {}; expected {TRANSACTION_SCHEMA}",
+                transaction.schema
+            ),
+        ));
+    }
+    Ok(transaction)
+}
+
+fn transaction_path_under_root(root: &Path, relative: &str) -> Result<PathBuf> {
+    if relative.is_empty() {
+        return Err(transaction_error(root, "transaction path is empty"));
+    }
+    safe_join(root, Path::new(relative))
+}
+
+fn present(path: &Path) -> Result<bool> {
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(Error::io(path, error)),
+    }
+}
+
+fn rollback_transaction(
+    root: &Path,
+    staging: &Path,
+    transaction: &ImportTransaction,
+) -> Result<()> {
+    for item in &transaction.items {
+        let staged = transaction_path_under_root(root, &item.staged)?;
+        let destination = transaction_path_under_root(root, &item.destination)?;
+        let staged_present = present(&staged)?;
+        let destination_present = present(&destination)?;
+        if staged_present {
+            let metadata = std::fs::symlink_metadata(&staged).map_err(|e| Error::io(&staged, e))?;
+            if metadata.file_type().is_symlink() {
+                return Err(Error::PathEscape {
+                    path: staged,
+                    root: staging.to_path_buf(),
+                });
+            }
+        }
+        if destination_present {
+            let metadata =
+                std::fs::symlink_metadata(&destination).map_err(|e| Error::io(&destination, e))?;
+            if metadata.file_type().is_symlink() {
+                return Err(Error::PathEscape {
+                    path: destination,
+                    root: root.to_path_buf(),
+                });
+            }
+        }
+        match (staged_present, destination_present) {
+            (true, true) => {
+                return Err(transaction_error(
+                    &transaction_path(staging),
+                    format!(
+                        "transaction item exists at both {:?} and {:?}",
+                        staged, destination
+                    ),
+                ));
+            }
+            (false, true) => {
+                if let Some(parent) = staged.parent() {
+                    std::fs::create_dir_all(parent).map_err(|e| Error::io(parent, e))?;
+                }
+                std::fs::rename(&destination, &staged).map_err(|e| Error::io(&staged, e))?;
+            }
+            (true, false) | (false, false) => {}
+        }
+    }
+    std::fs::remove_dir_all(staging).map_err(|e| Error::io(staging, e))
+}
+
+/// Recover interrupted imports before starting another mutating import.
+///
+/// The transaction marker is intentionally internal state. Recovery never
+/// runs for `--check`, so preview remains read-only.
+pub fn recover(root: &Path) -> Result<()> {
+    let metadata = match std::fs::symlink_metadata(root) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(Error::io(root, error)),
+    };
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
         return Err(Error::PathEscape {
             path: root.to_path_buf(),
             root: root.to_path_buf(),
         });
     }
-    for name in ["skills", "bundles"] {
-        let directory = root.join(name);
-        let metadata = match std::fs::symlink_metadata(&directory) {
-            Ok(metadata) => metadata,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => return Err(Error::io(&directory, error)),
-        };
+    validate_destination_layout(root)?;
+    let staging_root = root.join(".lskills/staging");
+    let metadata = match std::fs::symlink_metadata(&staging_root) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(Error::io(&staging_root, error)),
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(Error::PathEscape {
+            path: staging_root,
+            root: root.to_path_buf(),
+        });
+    }
+
+    let mut entries = std::fs::read_dir(&staging_root)
+        .map_err(|e| Error::io(&staging_root, e))?
+        .map(|entry| {
+            entry
+                .map(|entry| entry.path())
+                .map_err(|e| Error::io(&staging_root, e))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    entries.sort();
+    for staging in entries {
+        let metadata = std::fs::symlink_metadata(&staging).map_err(|e| Error::io(&staging, e))?;
         if metadata.file_type().is_symlink() || !metadata.is_dir() {
             return Err(Error::PathEscape {
-                path: directory,
-                root: root.to_path_buf(),
+                path: staging,
+                root: staging_root.clone(),
             });
         }
-        for entry in WalkDir::new(&directory).follow_links(false) {
-            let entry = entry.map_err(|error| {
-                let path = error.path().unwrap_or(&directory).to_path_buf();
-                Error::io(
-                    path,
-                    error
-                        .into_io_error()
-                        .unwrap_or_else(|| std::io::Error::other("walk error")),
-                )
-            })?;
-            let file_type = entry.file_type();
-            if file_type.is_symlink() {
-                return Err(Error::PathEscape {
-                    path: entry.path().to_path_buf(),
-                    root: directory.clone(),
-                });
-            }
-            if !file_type.is_file() && !file_type.is_dir() {
-                return Err(Error::io(
-                    entry.path(),
-                    std::io::Error::new(std::io::ErrorKind::InvalidData, "special file"),
-                ));
-            }
+        let transaction_path = transaction_path(&staging);
+        if !present(&transaction_path)? {
+            continue;
         }
+        let transaction = read_transaction(&staging)?;
+        let provenance = provenance::load(root)?;
+        let destination = Repo::load(root)?;
+        provenance::validate(&provenance, &destination)?;
+        let has_entry = provenance
+            .imports
+            .iter()
+            .any(|entry| entry.bundle == transaction.bundle && entry.digest == transaction.digest);
+        let destination_states = transaction
+            .items
+            .iter()
+            .map(|item| {
+                transaction_path_under_root(root, &item.destination).and_then(|path| present(&path))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let all_destinations_present = destination_states.into_iter().all(|state| state);
+        if has_entry && all_destinations_present {
+            std::fs::remove_dir_all(&staging).map_err(|e| Error::io(&staging, e))?;
+            continue;
+        }
+        if transaction.phase == TransactionPhase::Committed {
+            return Err(transaction_error(
+                &transaction_path,
+                "committed transaction has no matching complete provenance entry",
+            ));
+        }
+        if has_entry {
+            return Err(transaction_error(
+                &transaction_path,
+                "provenance was committed before all destination paths existed",
+            ));
+        }
+        rollback_transaction(root, &staging, &transaction)?;
     }
     Ok(())
 }
@@ -137,6 +430,7 @@ pub fn plan(
     }
     validate_source_tree(&source.root)?;
     validate_destination_layout(root)?;
+    ensure_roots_disjoint(&source.root, root)?;
 
     let bundle = source
         .bundles
@@ -146,6 +440,10 @@ pub fn plan(
     validate_bundle(source, bundle)?;
 
     let provenance = provenance::load(root)?;
+    if root.is_dir() {
+        let destination = Repo::load(root)?;
+        provenance::validate(&provenance, &destination)?;
+    }
     if provenance
         .imports
         .iter()
@@ -156,10 +454,7 @@ pub fn plan(
         });
     }
 
-    let staging = root
-        .join(".lskills")
-        .join("staging")
-        .join(format!("import-{}", bundle_name.as_str()));
+    let staging = staging_path(root, bundle_name);
     reject_existing(&staging)?;
 
     let bundle_destination = safe_join(
@@ -186,12 +481,7 @@ pub fn plan(
         reject_existing(&destination)?;
         let skill_files = collect_files(&skill.path)?;
         for file in skill_files {
-            let relative = file
-                .path
-                .strip_prefix(&skill.path)
-                .expect("skill file is under skill path")
-                .to_string_lossy()
-                .replace(std::path::MAIN_SEPARATOR, "/");
+            let relative = file.relative.clone();
             files.push(format!("skills/{}/{relative}", skill_name.as_str()));
         }
         source_skills.push((skill_name.clone(), skill.path.clone()));
@@ -221,8 +511,11 @@ pub fn plan(
 /// Apply a validated import plan.
 pub fn apply(plan: &ImportPlan) -> Result<ImportResult> {
     let root = &plan.root;
+    recover(root)?;
     prepare_destination(root)?;
     let mut provenance = provenance::load(root)?;
+    let destination = Repo::load(root)?;
+    provenance::validate(&provenance, &destination)?;
     provenance.imports.push(ProvenanceEntry {
         bundle: plan.bundle.clone(),
         source: plan.source.clone(),
@@ -231,15 +524,48 @@ pub fn apply(plan: &ImportPlan) -> Result<ImportResult> {
         digest: plan.digest.clone(),
     });
 
-    let staging = root
-        .join(".lskills")
-        .join("staging")
-        .join(format!("import-{}", plan.bundle.as_str()));
-    if std::fs::symlink_metadata(&staging).is_ok() {
-        return Err(Error::ImportCollision { path: staging });
+    let bundle_destination = root
+        .join("bundles")
+        .join(format!("{}.toml", plan.bundle.as_str()));
+    reject_existing(&bundle_destination)?;
+    for skill_name in &plan.skills {
+        reject_existing(&root.join("skills").join(skill_name.as_str()))?;
     }
+
+    let staging = staging_path(root, &plan.bundle);
+    reject_existing(&staging)?;
     std::fs::create_dir_all(staging.join("bundles")).map_err(|e| Error::io(&staging, e))?;
     std::fs::create_dir_all(staging.join("skills")).map_err(|e| Error::io(&staging, e))?;
+
+    let mut items = vec![TransactionItem {
+        staged: format!(
+            ".lskills/staging/import-{}/bundles/{}.toml",
+            plan.bundle.as_str(),
+            plan.bundle.as_str()
+        ),
+        destination: format!("bundles/{}.toml", plan.bundle.as_str()),
+    }];
+    for skill_name in &plan.skills {
+        items.push(TransactionItem {
+            staged: format!(
+                ".lskills/staging/import-{}/skills/{}",
+                plan.bundle.as_str(),
+                skill_name.as_str()
+            ),
+            destination: format!("skills/{}", skill_name.as_str()),
+        });
+    }
+    let mut transaction = ImportTransaction {
+        schema: TRANSACTION_SCHEMA,
+        bundle: plan.bundle.clone(),
+        digest: plan.digest.clone(),
+        phase: TransactionPhase::Staging,
+        items,
+    };
+    if let Err(error) = write_transaction(&staging, &transaction) {
+        let _ = std::fs::remove_dir_all(&staging);
+        return Err(error);
+    }
 
     let bundle_stage = staging
         .join("bundles")
@@ -257,35 +583,34 @@ pub fn apply(plan: &ImportPlan) -> Result<ImportResult> {
         }
     }
 
-    let mut moved = Vec::new();
-    let move_result = (|| -> Result<()> {
-        let staged_bundle = staging
-            .join("bundles")
-            .join(format!("{}.toml", plan.bundle.as_str()));
-        let destination_bundle = root
-            .join("bundles")
-            .join(format!("{}.toml", plan.bundle.as_str()));
-        move_staged(&staged_bundle, &destination_bundle, &mut moved)?;
-
-        for skill_name in &plan.skills {
-            let staged_skill = staging.join("skills").join(skill_name.as_str());
-            let destination_skill = root.join("skills").join(skill_name.as_str());
-            move_staged(&staged_skill, &destination_skill, &mut moved)?;
-        }
-        Ok(())
-    })();
-
-    if let Err(error) = move_result {
-        rollback(&mut moved);
+    transaction.phase = TransactionPhase::Ready;
+    if let Err(error) = write_transaction(&staging, &transaction) {
         let _ = std::fs::remove_dir_all(&staging);
         return Err(error);
+    }
+
+    let mut moved = Vec::new();
+    for item in &transaction.items {
+        let staged = transaction_path_under_root(root, &item.staged)?;
+        let destination = transaction_path_under_root(root, &item.destination)?;
+        if let Err(error) = move_staged(&staged, &destination, &mut moved) {
+            return finish_failed_import(&staging, &mut moved, error);
+        }
+    }
+
+    transaction.phase = TransactionPhase::Moved;
+    if let Err(error) = write_transaction(&staging, &transaction) {
+        return finish_failed_import(&staging, &mut moved, error);
     }
 
     if let Err(error) = provenance::write_atomic(root, &provenance) {
-        rollback(&mut moved);
-        let _ = std::fs::remove_dir_all(&staging);
-        return Err(error);
+        return finish_failed_import(&staging, &mut moved, error);
     }
+
+    transaction.phase = TransactionPhase::Committed;
+    // Materialization and provenance are complete. Leave the marker for the
+    // next mutating invocation to clean up safely if this write fails.
+    write_transaction(&staging, &transaction)?;
 
     let _ = std::fs::remove_dir_all(&staging);
     Ok(ImportResult {
@@ -299,6 +624,16 @@ pub fn apply(plan: &ImportPlan) -> Result<ImportResult> {
         digest: plan.digest.clone(),
         files: plan.files.clone(),
     })
+}
+
+fn finish_failed_import(
+    staging: &Path,
+    moved: &mut Vec<(PathBuf, PathBuf)>,
+    error: Error,
+) -> Result<ImportResult> {
+    rollback(moved)?;
+    let _ = std::fs::remove_dir_all(staging);
+    Err(error)
 }
 
 impl ImportPlan {
@@ -344,6 +679,7 @@ fn validate_bundle(source: &Repo, bundle: &Bundle) -> Result<()> {
 }
 
 fn validate_destination_root(root: &Path) -> Result<()> {
+    reject_symlink_root(root)?;
     if let Ok(metadata) = std::fs::symlink_metadata(root) {
         if metadata.file_type().is_symlink() || !metadata.is_dir() {
             return Err(Error::PathEscape {
@@ -453,7 +789,13 @@ fn collect_files(root: &Path) -> Result<Vec<SourceFile>> {
         let relative = path
             .strip_prefix(root)
             .expect("walked path is under root")
-            .to_string_lossy()
+            .to_str()
+            .ok_or_else(|| {
+                Error::io(
+                    path,
+                    std::io::Error::new(std::io::ErrorKind::InvalidData, "non-UTF-8 filename"),
+                )
+            })?
             .replace(std::path::MAIN_SEPARATOR, "/");
         files.push(SourceFile {
             path: path.to_path_buf(),
@@ -565,19 +907,51 @@ fn move_staged(
     Ok(())
 }
 
-fn rollback(moved: &mut Vec<(PathBuf, PathBuf)>) {
+fn rollback(moved: &mut Vec<(PathBuf, PathBuf)>) -> Result<()> {
     while let Some((destination, source)) = moved.pop() {
         if let Some(parent) = source.parent() {
-            let _ = std::fs::create_dir_all(parent);
+            std::fs::create_dir_all(parent).map_err(|e| Error::io(parent, e))?;
         }
-        let _ = std::fs::rename(destination, source);
+        std::fs::rename(&destination, &source).map_err(|e| Error::io(&source, e))?;
     }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn recovery_rolls_back_a_partially_moved_transaction() {
+        let root = TempDir::new().unwrap();
+        for directory in ["skills", "bundles", ".lskills/staging"] {
+            std::fs::create_dir_all(root.path().join(directory)).unwrap();
+        }
+        let staging = staging_path(root.path(), &BundleName::parse("demo").unwrap());
+        std::fs::create_dir_all(&staging).unwrap();
+        let transaction = ImportTransaction {
+            schema: TRANSACTION_SCHEMA,
+            bundle: BundleName::parse("demo").unwrap(),
+            digest: "sha256-".to_string() + &"a".repeat(64),
+            phase: TransactionPhase::Ready,
+            items: vec![TransactionItem {
+                staged: ".lskills/staging/import-demo/bundles/demo.toml".into(),
+                destination: "bundles/demo.toml".into(),
+            }],
+        };
+        write_transaction(&staging, &transaction).unwrap();
+        std::fs::write(
+            root.path().join("bundles/demo.toml"),
+            "name = \"demo\"\nskills = []\n",
+        )
+        .unwrap();
+
+        recover(root.path()).unwrap();
+
+        assert!(!root.path().join("bundles/demo.toml").exists());
+        assert!(!staging.exists());
+    }
 
     #[test]
     fn digest_is_stable_for_a_fixture() {

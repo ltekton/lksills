@@ -106,6 +106,44 @@ fn lskills_repo(spec: &str, cache: &Path) -> Command {
 }
 
 #[test]
+fn cache_rejects_a_checkout_bound_to_a_different_origin() {
+    if !git_available() {
+        eprintln!("skipping: git not available");
+        return;
+    }
+    let (_tmp, bare, _sha, _tag) = fake_remote();
+    let cache = TempDir::new().unwrap();
+    let spec = file_spec(&bare);
+
+    lskills_repo(&spec, cache.path())
+        .arg("list")
+        .assert()
+        .success();
+    let entry = std::fs::read_dir(cache.path().join("repos"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    git(
+        &entry,
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            "file:///tmp/not-the-requested-origin",
+        ],
+    );
+
+    lskills_repo(&spec, cache.path())
+        .arg("list")
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicates::str::contains("cache remote"));
+}
+
+#[test]
 fn repo_default_branch_lists_bundles() {
     if !git_available() {
         eprintln!("skipping: git not available");

@@ -16,8 +16,9 @@ implicit cross-workarea aggregation.
 Acceptance:
 
 - `import` requires `--root <path>`;
+- source and destination roots are disjoint;
 - the destination contains `skills/`, `bundles/`, and `.lskills/` state;
-- an import never writes into the machinery repository by default.
+- an import never writes into the machinery repository or its origin by default.
 
 ### ROOT-002 - Ordinary local ownership (Must)
 
@@ -35,7 +36,9 @@ Acceptance:
 
 - two origins can contribute different bundles to one root;
 - the origin of each imported bundle remains inspectable;
-- one origin is not treated as the source of all workarea content.
+- one origin is not treated as the source of all workarea content;
+- a reused Git cache entry is verified against the requested origin and pinned
+  revision.
 
 ### ORG-002 - Existing skills-root source contract (Must)
 
@@ -66,7 +69,8 @@ namespace, or automatically rename content.
 ### IMP-003 - Preview is read-only (Must)
 
 `import --check` validates the source, reports the selected bundle and planned
-files, and writes nothing to the origin or workarea.
+files, writes nothing to the workarea, and does not recover or remove staged
+transaction state.
 
 ### IMP-004 - No execution (Must)
 
@@ -117,9 +121,10 @@ stable error codes in JSON output and non-zero process status.
 
 ### SEC-001 - Safe boundaries (Must)
 
-All source and destination paths are validated. Traversal, unsafe symlinks, special
-files, and writes outside declared roots are rejected. Git commands use argument
-APIs and never a shell.
+All source and destination paths are validated. Traversal, unsafe symlinks,
+special files, non-UTF-8 relative filenames, source/destination overlap, and writes
+outside declared roots are rejected. Git commands use argument APIs and never a
+shell.
 
 ## Deferred requirements
 

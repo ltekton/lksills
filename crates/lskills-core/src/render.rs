@@ -45,9 +45,7 @@ impl Artifact {
         match self {
             Artifact::Json(v) => Ok(json_bytes(v)),
             Artifact::Text(s) => Ok(s.clone().into_bytes()),
-            Artifact::CopyVerbatim { from, .. } => {
-                std::fs::read(from).map_err(|e| Error::io(from, e))
-            }
+            Artifact::CopyVerbatim { from, .. } => read_regular_file(from),
         }
     }
 
@@ -57,15 +55,22 @@ impl Artifact {
     /// verbatim copy also the executable bit on unix), `Ok(false)` when it
     /// differs or is missing.
     pub fn matches_disk(&self, dest: &Path) -> Result<bool> {
+        validate_write_parents(dest)?;
         // A symlink at a generated path is drift no matter what it points at: the
         // renderer only ever writes regular files, so a link is a hand-edit to
         // report (and never something we read *through*).
+        match std::fs::symlink_metadata(dest) {
+            Ok(meta) if meta.file_type().is_symlink() => return Ok(false),
+            Ok(meta) if !meta.is_file() => return Ok(false),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(Error::io(dest, error)),
+            Ok(_) => {}
+        }
+        // A device/socket/fifo at the path is likewise not our file.
         #[cfg(unix)]
         {
             use std::os::unix::fs::FileTypeExt;
             match std::fs::symlink_metadata(dest) {
-                Ok(meta) if meta.file_type().is_symlink() => return Ok(false),
-                // A device/socket/fifo at the path is likewise not our file.
                 Ok(meta)
                     if meta.file_type().is_block_device()
                         || meta.file_type().is_char_device()
@@ -119,9 +124,11 @@ impl Artifact {
     /// Shared by `publish` (into the generated tree) and `install` (into an
     /// agent's skills dir) so the two write paths cannot diverge.
     pub fn write_to(&self, dest: &Path) -> Result<()> {
+        validate_write_destination(dest)?;
         if let Some(parent) = dest.parent() {
             std::fs::create_dir_all(parent).map_err(|e| Error::io(parent, e))?;
         }
+        validate_write_destination(dest)?;
         let bytes = self.current_bytes()?;
         std::fs::write(dest, &bytes).map_err(|e| Error::io(dest, e))?;
         self.apply_mode(dest)
@@ -142,6 +149,144 @@ impl Artifact {
     fn apply_mode(&self, _dest: &Path) -> Result<()> {
         Ok(())
     }
+}
+
+/// Reject symlinked, special, or non-UTF-8 content under renderer-owned roots.
+pub fn validate_generated_roots(root: &Path) -> Result<()> {
+    for generated in RenderMap::GENERATED_ROOTS {
+        let directory = root.join(generated);
+        let metadata = match std::fs::symlink_metadata(&directory) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(Error::io(&directory, error)),
+        };
+        if metadata.file_type().is_symlink() {
+            return Err(Error::PathEscape {
+                path: directory,
+                root: root.to_path_buf(),
+            });
+        }
+        if !metadata.is_dir() {
+            return Err(Error::io(
+                &directory,
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "generated root is not a directory",
+                ),
+            ));
+        }
+        for entry in walkdir::WalkDir::new(&directory).follow_links(false) {
+            let entry = entry.map_err(|error| {
+                let path = error.path().unwrap_or(&directory).to_path_buf();
+                Error::io(
+                    path,
+                    error
+                        .into_io_error()
+                        .unwrap_or_else(|| std::io::Error::other("walk error")),
+                )
+            })?;
+            let path = entry.path();
+            if entry.file_type().is_symlink() {
+                return Err(Error::PathEscape {
+                    path: path.to_path_buf(),
+                    root: root.to_path_buf(),
+                });
+            }
+            if !entry.file_type().is_file() && !entry.file_type().is_dir() {
+                return Err(Error::io(
+                    path,
+                    std::io::Error::new(std::io::ErrorKind::InvalidData, "special file"),
+                ));
+            }
+            if path
+                .strip_prefix(root)
+                .expect("generated path is under root")
+                .components()
+                .any(|component| component.as_os_str().to_str().is_none())
+            {
+                return Err(Error::io(
+                    path,
+                    std::io::Error::new(std::io::ErrorKind::InvalidData, "non-UTF-8 filename"),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn read_regular_file(path: &Path) -> Result<Vec<u8>> {
+    let metadata = std::fs::symlink_metadata(path).map_err(|e| Error::io(path, e))?;
+    if metadata.file_type().is_symlink() {
+        return Err(Error::PathEscape {
+            path: path.to_path_buf(),
+            root: path.to_path_buf(),
+        });
+    }
+    if !metadata.is_file() {
+        return Err(Error::io(
+            path,
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "artifact source is not a regular file",
+            ),
+        ));
+    }
+    std::fs::read(path).map_err(|e| Error::io(path, e))
+}
+
+fn validate_write_destination(dest: &Path) -> Result<()> {
+    validate_write_parents(dest)?;
+    match std::fs::symlink_metadata(dest) {
+        Ok(metadata) if metadata.file_type().is_symlink() => Err(Error::PathEscape {
+            path: dest.to_path_buf(),
+            root: dest.parent().unwrap_or(dest).to_path_buf(),
+        }),
+        Ok(metadata) if !metadata.is_file() => Err(Error::io(
+            dest,
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "artifact destination is not a regular file",
+            ),
+        )),
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(Error::io(dest, error)),
+    }
+}
+
+fn validate_write_parents(dest: &Path) -> Result<()> {
+    let root = dest.parent().unwrap_or(dest).to_path_buf();
+    let mut ancestor = dest.parent().map(Path::to_path_buf);
+    while let Some(path) = ancestor {
+        if path.as_os_str().is_empty() {
+            break;
+        }
+        match std::fs::symlink_metadata(&path) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() {
+                    return Err(Error::PathEscape {
+                        path,
+                        root: root.clone(),
+                    });
+                }
+                if !metadata.is_dir() {
+                    return Err(Error::io(
+                        &path,
+                        std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            "artifact parent is not a directory",
+                        ),
+                    ));
+                }
+                break;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                ancestor = path.parent().map(Path::to_path_buf);
+            }
+            Err(error) => return Err(Error::io(&path, error)),
+        }
+    }
+    Ok(())
 }
 
 /// Every generated file, keyed by repo-relative (forward-slash) path.
@@ -197,6 +342,35 @@ mod tests {
         // Flip the exec bits: now it drifts.
         std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o644)).unwrap();
         assert!(!art.matches_disk(&dest).unwrap());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_rejects_a_symlinked_parent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let link = tmp.path().join("generated");
+        std::os::unix::fs::symlink(outside.path(), &link).unwrap();
+        let artifact = Artifact::Text("must not escape\n".to_string());
+
+        assert!(matches!(
+            artifact.write_to(&link.join("file.txt")),
+            Err(Error::PathEscape { .. })
+        ));
+        assert!(!outside.path().join("file.txt").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn generated_root_validation_rejects_a_symlink() {
+        let tmp = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path(), tmp.path().join("plugins")).unwrap();
+
+        assert!(matches!(
+            validate_generated_roots(tmp.path()),
+            Err(Error::PathEscape { .. })
+        ));
     }
 
     #[cfg(unix)]

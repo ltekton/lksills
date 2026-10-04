@@ -7,7 +7,7 @@ use serde::Serialize;
 use walkdir::WalkDir;
 
 use crate::error::{Error, Result};
-use crate::render::RenderMap;
+use crate::render::{self, RenderMap};
 
 /// One drift entry: a generated file that is missing, extra, or changed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -49,6 +49,7 @@ impl DriftReport {
 /// Missing/Changed come from the render map; Extra comes from walking the
 /// generated roots for files the map does not claim.
 pub fn compute(root: &Path, map: &RenderMap) -> Result<DriftReport> {
+    render::validate_generated_roots(root)?;
     let mut entries = Vec::new();
     let expected: BTreeSet<&String> = map.0.keys().collect();
 
@@ -83,11 +84,10 @@ pub fn compute(root: &Path, map: &RenderMap) -> Result<DriftReport> {
                         .unwrap_or_else(|| std::io::Error::other("walk error")),
                 )
             })?;
-            // Directories are structure, not content; every non-directory under a
-            // generated root (regular file, symlink, or special file) that the map
-            // does not claim is Extra. Using the entry's own file type (WalkDir
-            // does not follow links) means a stray symlink is reported, not
-            // silently skipped by an `is_file()` that a link fails.
+            // Directories are structure, not content; every regular file under a
+            // generated root that the map does not claim is Extra. Renderer-owned
+            // roots are validated before this walk, so links and special files
+            // fail closed rather than being followed or silently ignored.
             if entry.file_type().is_dir() {
                 continue;
             }
@@ -96,8 +96,18 @@ pub fn compute(root: &Path, map: &RenderMap) -> Result<DriftReport> {
                 .strip_prefix(root)
                 .expect("walked path under root")
                 .components()
-                .map(|c| c.as_os_str().to_string_lossy())
-                .collect::<Vec<_>>()
+                .map(|component| {
+                    component.as_os_str().to_str().ok_or_else(|| {
+                        Error::io(
+                            entry.path(),
+                            std::io::Error::new(
+                                std::io::ErrorKind::InvalidData,
+                                "non-UTF-8 filename",
+                            ),
+                        )
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?
                 .join("/");
             if !expected.contains(&rel) {
                 entries.push(DriftEntry::Extra { path: rel });

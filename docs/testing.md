@@ -29,9 +29,10 @@ Unit tests should cover:
 - provenance serialization and reload;
 - local digest and Git revision formatting;
 - bundle and member collision detection;
-- destination path validation;
+- destination path validation and source/destination disjointness;
+- Git cache identity and pinned revision verification;
 - deterministic file enumeration;
-- all-or-nothing import planning;
+- all-or-nothing import planning and interrupted-transaction recovery;
 - malformed or dangling provenance records.
 
 ## Process tests
@@ -46,9 +47,11 @@ Required scenarios:
 5. reject an existing bundle collision without partial files;
 6. reject a referenced skill collision without partial files;
 7. run `import --check` and verify no destination writes;
-8. prove source scripts and executable-looking files never run;
-9. validate and publish the assembled workarea;
-10. prove the machinery repository remains unchanged.
+8. reject source/destination overlap and unsafe special-file content;
+9. prove source scripts and executable-looking files never run;
+10. validate and publish the assembled workarea;
+11. prove the machinery repository remains unchanged;
+12. recover a partially moved transaction without leaving a destination bundle.
 
 Keep the existing prototype corpus, installation, remote, release, and guard tests
 running. They are regression coverage, not reasons to expand the new scope.

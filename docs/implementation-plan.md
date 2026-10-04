@@ -1,6 +1,6 @@
 # lskills Implementation Plan
 
-> Status: MVP complete
+> Status: MVP complete after hardening pass
 
 This plan implements one simple workflow: import bundles from multiple local or Git
 skills-roots into one workarea, then use the existing validation and publishing
@@ -120,9 +120,21 @@ Make provenance visible without changing the existing skills-root publishing mod
 - Validate provenance records for malformed or dangling bundle entries.
 - Keep `validate` as the workarea integrity gate.
 - Keep `publish [--check]` as the native output operation.
-- Preserve the current process corpus and add a two-origin end-to-end process test.
 - Document that `install`, scaffolding, release, tokens, hygiene, doctor, and
   catalog remain prototype behavior outside the new import contract.
+- Validate Git cache identity and pinned revisions before reuse.
+- Reject source/destination overlap and missing source layout directories.
+- Validate regular-file and directory kinds, non-UTF-8 filenames, and provenance
+  semantics across import, inspection, validation, and publishing.
+- Recover interrupted staged imports using an internal transaction marker.
+- Preserve a clean machinery repository through explicit-root process coverage.
+
+### Hardening evidence
+
+The final implementation also covers cache identity, root overlap, special-file and
+filename safety, provenance enforcement on publishing, interrupted transaction
+recovery, and machinery-repository isolation. These are tested in the process suite
+and core unit tests.
 
 ### Definition of done
 
@@ -138,8 +150,8 @@ Run after each implementation phase:
 
 ```sh
 mise run check
-eval "$(mise env -s zsh)" && cargo test -p lskills-cli --test import
-eval "$(mise env -s zsh)" && cargo test -p lskills-cli --test corpus
+cargo test -p lskills-cli --test import
+cargo test -p lskills-cli --test corpus
 ```
 
 Before declaring the MVP complete, run the actual binary against temporary local

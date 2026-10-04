@@ -84,12 +84,19 @@ The importer:
 
 1. selects one existing bundle;
 2. resolves its referenced skills;
-3. checks all destination names and paths;
-4. builds a complete staged copy;
-5. writes the staged bundle and skills into the workarea;
-6. appends one provenance entry only after the copy succeeds.
+3. verifies the source and destination roots are disjoint;
+4. checks all destination names and paths;
+5. builds a complete staged copy and durable recovery marker;
+6. writes the staged bundle and skills into the workarea;
+7. appends one provenance entry only after the copy succeeds;
+8. removes the recovery marker after commit.
 
 A failed import must not leave a partial bundle or a successful provenance record.
+
+The importer uses a short-lived transaction marker under `.lskills/staging` while
+placing a bundle. A later mutating operation or workarea inspection recovers an
+interrupted placement before loading the workarea. The marker is internal recovery
+state, not an update ledger.
 
 ### Provenance store
 
@@ -122,7 +129,9 @@ general plan/application framework.
 
 - one invocation has one workarea root;
 - an origin is never mutated by import;
+- source and destination roots are disjoint;
 - a destination bundle and its member skills are all-or-nothing;
+- interrupted transactions are recovered before workarea operations continue;
 - names and relative paths are validated before joins;
 - imported files are never executed;
 - provenance is written only after successful materialization;

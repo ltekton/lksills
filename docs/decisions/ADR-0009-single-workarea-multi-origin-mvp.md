@@ -27,7 +27,8 @@ workspace.
 
 There is one ordinary local workarea per invocation. It is selected with `--root`.
 Imports require an explicit root. lskills does not register, clone, refresh, commit,
-or push the workarea.
+or push the workarea. The origin and destination roots must be disjoint, including
+not-yet-created destination paths.
 
 ### Origins
 
@@ -58,7 +59,9 @@ update subscription.
 
 If the destination bundle or any referenced skill already exists, the import fails
 without partial writes. There is no merge, replacement, namespace, or automatic
-rename.
+rename. Placement uses a short-lived internal transaction marker under
+`.lskills/staging`; interrupted placement is recovered before another workarea
+operation loads the tree. This marker is not provenance or an update ledger.
 
 ### Command surface
 

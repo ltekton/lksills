@@ -10,7 +10,7 @@ use walkdir::WalkDir;
 use crate::drift::{self, DriftReport};
 use crate::error::{Error, Result};
 use crate::generate;
-use crate::render::RenderMap;
+use crate::render::{self, RenderMap};
 use crate::repo::Repo;
 
 /// Result of a publish run.
@@ -35,6 +35,7 @@ impl PublishResult {
 /// Check for drift without modifying the tree.
 pub fn check(repo: &Repo, tool_version: &str) -> Result<PublishResult> {
     let map = generate::render(repo, tool_version)?;
+    render::validate_generated_roots(&repo.root)?;
     let report = drift::compute(&repo.root, &map)?;
     Ok(PublishResult {
         written: Vec::new(),
@@ -59,6 +60,7 @@ pub fn check(repo: &Repo, tool_version: &str) -> Result<PublishResult> {
 /// hand-authored files.
 pub fn write(repo: &Repo, tool_version: &str) -> Result<PublishResult> {
     let map = generate::render(repo, tool_version)?;
+    render::validate_generated_roots(&repo.root)?;
     let mut written = Vec::new();
 
     for (rel, artifact) in &map.0 {

@@ -12,6 +12,8 @@
 
 use std::path::{Path, PathBuf};
 
+use sha2::{Digest, Sha256};
+
 use crate::error::{Error, Result};
 use crate::git;
 
@@ -126,20 +128,39 @@ fn is_sha(r: &str) -> bool {
 /// Without it, a pinned SHA/tag entry is reused as-is and a branch/default entry
 /// is fast-forwarded to the remote head.
 pub fn resolve(spec: &RepoSpec, cache_root: &Path, refresh: bool) -> Result<PathBuf> {
-    let dir = cache_root.join("repos").join(cache_key(spec));
+    let dir = cache_path(spec, cache_root);
     let kind = spec.ref_kind();
 
-    if refresh && dir.exists() {
+    let existing = match std::fs::symlink_metadata(&dir) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                return Err(Error::io(
+                    &dir,
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "cache entry is not a directory",
+                    ),
+                ));
+            }
+            true
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => return Err(Error::io(&dir, error)),
+    };
+
+    if refresh && existing {
         std::fs::remove_dir_all(&dir).map_err(|e| Error::io(&dir, e))?;
     }
 
-    if dir.exists() {
+    if existing && !refresh {
+        verify_cache(spec, &dir)?;
         // A pinned SHA is immutable - reuse the checkout untouched. A branch,
         // tag, or the default head may have moved, so fast-forward it (a tag
         // fetch is a harmless no-op).
         if kind == RefKind::Branch {
             update_branch(spec, &dir)?;
         }
+        verify_cache(spec, &dir)?;
         return Ok(dir);
     }
 
@@ -153,7 +174,40 @@ pub fn resolve(spec: &RepoSpec, cache_root: &Path, refresh: bool) -> Result<Path
         }
         RefKind::Sha => fetch_sha(spec, &dir)?,
     }
+    verify_cache(spec, &dir)?;
     Ok(dir)
+}
+
+/// Return the deterministic cache checkout path without creating or changing it.
+pub fn cache_path(spec: &RepoSpec, cache_root: &Path) -> PathBuf {
+    cache_root.join("repos").join(cache_key(spec))
+}
+
+fn verify_cache(spec: &RepoSpec, dir: &Path) -> Result<()> {
+    let configured = git::remote_url(dir, ORIGIN)?;
+    if configured.as_deref() != Some(spec.spec.as_str()) {
+        return Err(Error::Command {
+            command: "cache validation".into(),
+            reason: format!(
+                "cache remote {:?} does not match requested origin {:?}",
+                configured, spec.spec
+            ),
+        });
+    }
+    if spec.ref_kind() == RefKind::Sha {
+        let expected = spec.reference.as_deref().expect("SHA has a reference");
+        let actual = git::head(dir)?.ok_or_else(|| Error::Command {
+            command: "cache validation".into(),
+            reason: "cache checkout has no HEAD".into(),
+        })?;
+        if actual != expected {
+            return Err(Error::Command {
+                command: "cache validation".into(),
+                reason: format!("cache HEAD {actual:?} does not match requested {expected:?}"),
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Fast-forward an existing branch/default checkout to its remote head.
@@ -182,22 +236,23 @@ fn fetch_sha(spec: &RepoSpec, dir: &Path) -> Result<()> {
     git::checkout(dir, "FETCH_HEAD")
 }
 
-/// A filesystem-safe cache-dir name for a spec: `<sanitized-spec>@<ref>`.
+/// A filesystem-safe cache key derived from the exact spec and reference.
 ///
-/// The sanitized form is only a directory name; the raw [`RepoSpec::spec`] is
-/// what git actually clones, so lossy sanitization here is fine.
+/// The digest prevents distinct origins or references from sharing a cache
+/// directory through lossy character replacement.
 fn cache_key(spec: &RepoSpec) -> String {
-    let sanitized: String = spec
-        .spec
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-        .collect();
     let reference = spec.reference.as_deref().unwrap_or(DEFAULT_REF);
-    let ref_sanitized: String = reference
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-        .collect();
-    format!("{sanitized}@{ref_sanitized}")
+    let mut hasher = Sha256::new();
+    hasher.update(spec.spec.as_bytes());
+    hasher.update([0]);
+    hasher.update(reference.as_bytes());
+    let digest = hasher.finalize();
+    let mut hex = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        use std::fmt::Write as _;
+        write!(&mut hex, "{byte:02x}").expect("writing to String cannot fail");
+    }
+    format!("repo-{hex}")
 }
 
 #[cfg(test)]
@@ -276,9 +331,16 @@ mod tests {
     #[test]
     fn cache_key_is_filesystem_safe() {
         let key = cache_key(&parse("https://host/o/r.git@main"));
-        assert!(!key.contains('/'));
-        assert!(key.ends_with("@main"));
+        assert!(key.starts_with("repo-"));
+        assert_eq!(key.len(), "repo-".len() + 64);
         let default = cache_key(&parse("owner/repo"));
-        assert!(default.ends_with("@default"));
+        assert_eq!(default.len(), "repo-".len() + 64);
+    }
+
+    #[test]
+    fn cache_keys_distinguish_lossy_spec_collisions() {
+        let dashed = cache_key(&parse("file:///tmp/a-b"));
+        let underscored = cache_key(&parse("file:///tmp/a_b"));
+        assert_ne!(dashed, underscored);
     }
 }

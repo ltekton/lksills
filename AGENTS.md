@@ -59,7 +59,11 @@ Do not add these to the MVP without an explicit scope decision and design update
 ## Safety and implementation rules
 
 - Use validated `BundleName`, `SkillFullName`, and safe relative paths.
-- Require explicit destination roots for mutating imports.
+- `import` requires an explicit destination root.
+- Source and destination roots must be disjoint; an import never writes into its
+  origin.
+- Imports use a durable internal transaction marker so interrupted placement can
+  be recovered before another workarea operation proceeds.
 - Stage an import and publish provenance only after the complete selected bundle is
   valid. A failed import must not leave a partial bundle in the workarea.
 - Reject traversal, unsafe symlinks, and unsupported special files.
@@ -73,10 +77,11 @@ Do not add these to the MVP without an explicit scope decision and design update
 
 ## Toolchain and tests
 
-`cargo` is provided through mise:
+`cargo` is provided through mise shims on `PATH`, so direct Cargo commands work
+without shell-evaluation setup:
 
 ```sh
-eval "$(mise env -s zsh)" && cargo ...
+cargo ...
 ```
 
 The repository gate is:

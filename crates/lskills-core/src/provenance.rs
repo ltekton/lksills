@@ -1,6 +1,7 @@
 //! Import provenance stored in the workarea.
 
 use std::collections::BTreeSet;
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -124,7 +125,13 @@ pub fn validate(value: &ProvenanceFile, repo: &Repo) -> Result<()> {
                 reason: format!("bundle {name:?} has an empty revision"),
             });
         }
-        if !entry.digest.starts_with("sha256-") {
+        if !valid_revision(&entry.revision) {
+            return Err(Error::Provenance {
+                path: path.clone(),
+                reason: format!("bundle {name:?} has an invalid revision"),
+            });
+        }
+        if !valid_digest(&entry.digest) {
             return Err(Error::Provenance {
                 path: path.clone(),
                 reason: format!("bundle {name:?} has an invalid digest"),
@@ -132,6 +139,23 @@ pub fn validate(value: &ProvenanceFile, repo: &Repo) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn valid_revision(value: &str) -> bool {
+    if let Some(sha) = value.strip_prefix("git:") {
+        return matches!(sha.len(), 40 | 64) && sha.bytes().all(|b| b.is_ascii_hexdigit());
+    }
+    if let Some(digest) = value.strip_prefix("local:") {
+        return valid_digest(digest);
+    }
+    false
+}
+
+fn valid_digest(value: &str) -> bool {
+    let Some(hex) = value.strip_prefix("sha256-") else {
+        return false;
+    };
+    hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 /// Atomically write the provenance sidecar.
@@ -152,7 +176,10 @@ pub fn write_atomic(root: &Path, value: &ProvenanceFile) -> Result<()> {
             });
         }
     }
-    std::fs::write(&temp, text).map_err(|e| Error::io(&temp, e))?;
+    let mut file = std::fs::File::create(&temp).map_err(|e| Error::io(&temp, e))?;
+    file.write_all(text.as_bytes())
+        .map_err(|e| Error::io(&temp, e))?;
+    file.sync_all().map_err(|e| Error::io(&temp, e))?;
     if let Err(error) = std::fs::rename(&temp, &path) {
         let _ = std::fs::remove_file(&temp);
         return Err(Error::io(&path, error));
@@ -178,8 +205,8 @@ mod tests {
             bundle: BundleName::parse("demo").unwrap(),
             source: "origin".into(),
             selector: "bundles/demo.toml".into(),
-            revision: "local:one".into(),
-            digest: "sha256-abc".into(),
+            revision: "local:sha256-".to_string() + &"a".repeat(64),
+            digest: "sha256-".to_string() + &"b".repeat(64),
         });
         write_atomic(root.path(), &value).unwrap();
         assert_eq!(load(root.path()).unwrap(), value);

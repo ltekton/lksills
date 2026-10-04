@@ -36,16 +36,19 @@ lskills import <ORIGIN> \
 The command:
 
 1. resolves the origin;
-2. loads and validates the selected bundle;
-3. verifies every referenced skill exists and is safe;
-4. reports or stages the complete destination copy;
-5. records provenance after a successful apply.
+2. verifies the source and destination roots are disjoint;
+3. loads and validates the selected bundle;
+4. verifies every referenced skill exists and is safe;
+5. reports or stages the complete destination copy;
+6. records provenance after a successful apply.
 
 `--check` previews the selected bundle, member skills, source revision/digest,
 collisions, and planned files without writing anything.
 
 Import never replaces an existing bundle or skill. A collision is an error and the
-complete import is abandoned.
+complete import is abandoned. Apply uses internal recovery state under
+`.lskills/staging`; a later workarea operation recovers an interrupted placement.
+`--check` does not recover or remove staged state.
 
 ### List
 
@@ -69,7 +72,8 @@ Shows an existing bundle or skill and, when available, its source provenance.
 lskills validate --root <WORKAREA> [--json]
 ```
 
-Runs the existing skills-root validation and reports errors and warnings.
+Runs the existing skills-root validation and validates the provenance sidecar and
+its references. Errors and warnings are reported.
 
 ### Publish
 
@@ -77,9 +81,9 @@ Runs the existing skills-root validation and reports errors and warnings.
 lskills publish --root <WORKAREA> [--check] [--json]
 ```
 
-Runs the existing deterministic native renderer. `--check` reports generated-tree
-drift without writing. Publishing does not fetch origins, update provenance, commit,
-or push.
+Runs the existing deterministic native renderer. Provenance is validated before
+rendering. `--check` reports generated-tree drift without writing. Publishing does
+not fetch origins, update provenance, commit, or push.
 
 ## Provenance
 

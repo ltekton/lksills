@@ -47,13 +47,26 @@ pub fn walk_skill(skill_dir: &Path) -> Result<Vec<SkillFile>> {
         if entry.file_type().is_dir() {
             continue;
         }
+        if !entry.file_type().is_file() {
+            return Err(Error::io(
+                path,
+                std::io::Error::new(std::io::ErrorKind::InvalidData, "special file"),
+            ));
+        }
         let rel = path
             .strip_prefix(skill_dir)
             .expect("walked path is under skill_dir");
         let rel_posix = rel
             .components()
-            .map(|c| c.as_os_str().to_string_lossy())
-            .collect::<Vec<_>>()
+            .map(|component| {
+                component.as_os_str().to_str().ok_or_else(|| {
+                    Error::io(
+                        path,
+                        std::io::Error::new(std::io::ErrorKind::InvalidData, "non-UTF-8 filename"),
+                    )
+                })
+            })
+            .collect::<Result<Vec<_>>>()?
             .join("/");
         if is_source_only(&rel_posix) {
             continue;
