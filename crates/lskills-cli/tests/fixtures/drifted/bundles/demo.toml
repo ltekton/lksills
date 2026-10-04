@@ -1,0 +1,6 @@
+name = "demo"
+version = "1.0.0"
+description = "A minimal one-skill bundle for the drift fixture."
+author = "ltekton"
+skills = ["demo-hello"]
+agents = ["claude", "pi"]

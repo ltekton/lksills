@@ -1,0 +1,5 @@
+name = "demo-sub"
+version = "1.0.0"
+description = "Also claims demo-sub-tool (valid prefix demo-sub-)."
+skills = ["demo-sub-tool"]
+agents = ["claude"]

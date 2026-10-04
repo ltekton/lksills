@@ -1,0 +1,12 @@
+{
+  "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
+  "author": {
+    "name": "ltekton"
+  },
+  "description": "A demo bundle spanning claude and pi.",
+  "name": "demo",
+  "skills": [
+    "./skills"
+  ],
+  "version": "1.2.0"
+}

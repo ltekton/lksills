@@ -1,0 +1,48 @@
+{
+  "bundles": [
+    {
+      "agents": [
+        "claude",
+        "pi"
+      ],
+      "description": "A demo bundle spanning claude and pi.",
+      "name": "demo",
+      "skills": [
+        "demo-hello",
+        "demo-world"
+      ],
+      "version": "1.2.0"
+    },
+    {
+      "agents": [
+        "codex"
+      ],
+      "description": "A codex-only bundle, excluded from pi and never rendered to Claude.",
+      "name": "only",
+      "skills": [
+        "only-codex-tool"
+      ],
+      "version": "0.3.1"
+    }
+  ],
+  "skills": [
+    {
+      "depends_on": [],
+      "description": "Say hello. A demo skill with a shipped script and a source-only mirrors dir.",
+      "name": "demo-hello"
+    },
+    {
+      "depends_on": [
+        "demo-hello"
+      ],
+      "description": "Describe the world. A second demo skill that backticks `demo-hello` to depend on it.",
+      "name": "demo-world"
+    },
+    {
+      "depends_on": [],
+      "description": "A codex-only skill. It is excluded from the pi manifest and never rendered to Claude.",
+      "name": "only-codex-tool"
+    }
+  ],
+  "v": 1
+}

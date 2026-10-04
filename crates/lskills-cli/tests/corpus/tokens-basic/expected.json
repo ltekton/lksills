@@ -1,0 +1,44 @@
+{
+  "bundles": [
+    {
+      "always_on": 46,
+      "body": 110,
+      "name": "demo",
+      "skills": [
+        "demo-hello",
+        "demo-world"
+      ]
+    },
+    {
+      "always_on": 26,
+      "body": 47,
+      "name": "only",
+      "skills": [
+        "only-codex-tool"
+      ]
+    }
+  ],
+  "chars_per_token": 4,
+  "skills": [
+    {
+      "always_on": 22,
+      "body": 68,
+      "name": "demo-hello"
+    },
+    {
+      "always_on": 24,
+      "body": 42,
+      "name": "demo-world"
+    },
+    {
+      "always_on": 26,
+      "body": 47,
+      "name": "only-codex-tool"
+    }
+  ],
+  "totals": {
+    "always_on": 72,
+    "body": 157
+  },
+  "v": 1
+}

@@ -1,0 +1,13 @@
+{
+  "bundles": [
+    "demo"
+  ],
+  "description": "Say hello. A demo skill with a shipped script and a source-only mirrors dir.",
+  "files": [
+    "SKILL.md",
+    "scripts/greet.sh"
+  ],
+  "kind": "skill",
+  "name": "demo-hello",
+  "v": 1
+}

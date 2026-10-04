@@ -1,0 +1,9 @@
+name = "demo"
+version = "1.2.0"
+description = "A demo bundle spanning claude and pi."
+author = "ltekton"
+skills = [
+  "demo-hello",
+  "demo-world",
+]
+agents = ["claude", "pi"]

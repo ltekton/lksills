@@ -1,0 +1,30 @@
+[tools]
+rust = "stable"
+
+[tasks.fmt]
+description = "Check formatting"
+run = "cargo fmt --all -- --check"
+
+[tasks.clippy]
+description = "Lint with warnings as errors"
+run = "cargo clippy --workspace --all-targets -- -D warnings"
+
+[tasks.test]
+description = "Run the workspace test suite"
+run = "cargo test --workspace"
+# INSTA_UPDATE=no: snapshot drift fails rather than silently rewrites.
+# LSKILLS_REQUIRE_GIT=1: the git-dependent remote/release tests must run (CI
+# runners always have git), not silently skip on a misconfigured toolchain.
+env = { INSTA_UPDATE = "no", LSKILLS_REQUIRE_GIT = "1" }
+
+[tasks.build]
+description = "Build the workspace"
+run = "cargo build --workspace"
+
+[tasks.vscode]
+description = "Open lskills in the Rust VS Code profile"
+run = "code --profile rust ."
+
+[tasks.check]
+description = "Full gate: fmt + clippy + test"
+depends = ["fmt", "clippy", "test"]

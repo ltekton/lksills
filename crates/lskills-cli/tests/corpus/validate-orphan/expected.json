@@ -1,0 +1,12 @@
+{
+  "issues": [
+    {
+      "code": "unbundled",
+      "level": "warning",
+      "message": "skill \"demo-world\" is not a member of any bundle",
+      "subject": "demo-world"
+    }
+  ],
+  "ok": true,
+  "v": 1
+}

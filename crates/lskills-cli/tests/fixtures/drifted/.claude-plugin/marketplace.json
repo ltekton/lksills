@@ -1,0 +1,19 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "description": "lskills: agent skills for pi, Codex, and Claude Code",
+  "name": "lskills",
+  "owner": {
+    "name": "ltekton",
+    "url": "https://github.com/ltekton"
+  },
+  "plugins": [
+    {
+      "author": {
+        "name": "ltekton"
+      },
+      "description": "A minimal one-skill bundle for the drift fixture.",
+      "name": "demo",
+      "source": "./plugins/demo"
+    }
+  ]
+}

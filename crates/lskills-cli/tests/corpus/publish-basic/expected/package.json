@@ -1,0 +1,11 @@
+{
+  "description": "lskills: agent skills for pi, Codex, and Claude Code",
+  "name": "lskills",
+  "pi": {
+    "skills": [
+      "skills",
+      "!skills/only-codex-tool"
+    ]
+  },
+  "version": "0.1.0"
+}

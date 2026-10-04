@@ -1,0 +1,12 @@
+{
+  "issues": [
+    {
+      "code": "unresolved_link",
+      "level": "warning",
+      "message": "relative link \"examples/missing.md\" does not exist in skill directory",
+      "subject": "demo-hello"
+    }
+  ],
+  "ok": true,
+  "v": 1
+}

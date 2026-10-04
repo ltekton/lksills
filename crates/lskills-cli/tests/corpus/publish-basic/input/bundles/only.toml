@@ -1,0 +1,7 @@
+name = "only"
+version = "0.3.1"
+description = "A codex-only bundle, excluded from pi and never rendered to Claude."
+skills = [
+  "only-codex-tool",
+]
+agents = ["codex"]

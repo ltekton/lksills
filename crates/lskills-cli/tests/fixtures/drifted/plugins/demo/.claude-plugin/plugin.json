@@ -1,0 +1,12 @@
+{
+  "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
+  "author": {
+    "name": "ltekton"
+  },
+  "description": "A minimal one-skill bundle for the drift fixture.",
+  "name": "demo",
+  "skills": [
+    "./skills"
+  ],
+  "version": "1.0.0"
+}
