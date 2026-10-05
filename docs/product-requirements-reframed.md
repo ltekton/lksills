@@ -1,17 +1,18 @@
-# Historical product requirements
+# Historical product-requirements draft
 
-This file records an earlier product-reset draft and is retained as historical
-reference. It is not an active requirements source.
+This file is retained only because earlier discussions and links used its name. It
+is not an active requirements source.
 
-The active documents are:
+Use:
 
-- [`product.md`](product.md) - one-workarea product boundary;
-- [`product-requirements.md`](product-requirements.md) - reduced MVP contract;
-- [`architecture.md`](architecture.md) - current two-crate design;
-- [`domain-model.md`](domain-model.md) - small Skill/Bundle model;
-- [`implementation-plan.md`](implementation-plan.md) - two-phase import plan;
-- [`specs/`](specs/) - active and deferred subsystem notes;
-- [`decisions/ADR-0009-single-workarea-multi-origin-mvp.md`](decisions/ADR-0009-single-workarea-multi-origin-mvp.md) - current scope decision.
+- [`product.md`](product.md) for the product boundary;
+- [`product-requirements.md`](product-requirements.md) for normative target requirements;
+- [`domain-model.md`](domain-model.md) for vocabulary and invariants;
+- [`architecture.md`](architecture.md) for target component boundaries;
+- [`implementation-plan.md`](implementation-plan.md) for migration phases;
+- [`specs/`](specs/) for focused behavior;
+- [`decisions/ADR-0010-manifest-lockfile-skills-lifecycle.md`](decisions/ADR-0010-manifest-lockfile-skills-lifecycle.md) for the accepted decision.
 
-The broader asset-first, multi-workarea, update, package, and publication design
-was superseded because it exceeded the immediate use case.
+The active design is the manifest-and-lockfile skills lifecycle. Neither the older
+asset-first draft nor the later reduced workarea/import prototype is the current
+product contract.

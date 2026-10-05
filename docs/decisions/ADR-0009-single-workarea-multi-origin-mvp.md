@@ -1,6 +1,6 @@
 # ADR-0009 - Single-workarea, multi-origin MVP
 
-- Status: Accepted
+- Status: Superseded by ADR-0010
 - Date: 2026-10-04
 - Deciders: lskills maintainers
 
@@ -103,7 +103,11 @@ Costs:
 
 ## Supersession
 
-This ADR supersedes earlier M0 decisions wherever they introduce multiple
+ADR-0010 supersedes this reduced implementation decision as the active product and
+target architecture. This file remains the historical contract for the currently
+implemented import prototype.
+
+This ADR previously superseded earlier M0 decisions wherever they introduced multiple
 workareas, a generic asset-first domain, baselines, upstream coordination, package
 artifacts, catalogs, publication adapters, or a four-crate rewrite:
 

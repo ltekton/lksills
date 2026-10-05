@@ -1,64 +1,83 @@
 # lskills
 
-`lskills` manages one local skills workarea assembled from multiple origins and
-publishes that collection to the agent targets already supported by the project.
+`lskills` is a skills-focused package manager for consuming, authoring, modifying,
+composing, and republishing Agent Skills in a declarative, deterministic,
+reproducible workflow.
 
-The first useful workflow is:
+The target lifecycle uses:
 
-```text
-origin skills-root A ─┐
-origin skills-root B ─┼─> one workarea ─> validate ─> publish
-local skills-root C ─┘
+- `lskills.toml` for human-authored package, dependency, selection, fork, and target
+  intent;
+- `lskills.lock.toml` for exact resolutions, hashes, dependency edges, fork bases,
+  and deployment ownership;
+- project and global scopes with independent dependency graphs; global manifests
+  and configuration under `${XDG_CONFIG_HOME:-$HOME/.config}/lskills`;
+- `fork` to promote an exact locked external skill into editable local source;
+- deterministic bundles for verification and immutable publication.
+
+```console
+lskills init
+lskills install microsoft/apm-sample-package#v1.0.0
+lskills install --frozen
+lskills fork microsoft/apm-sample-package --skill example --as my-example
+lskills audit
+lskills pack
 ```
 
-An origin is read-only source content. The workarea is the one local `skills/` plus
-`bundles/` tree that the operator owns and edits. An imported bundle keeps a small
-provenance record identifying its source and revision.
+## Status
 
-## Scope
+The target product and architecture are specified, but not yet implemented. The
+current Rust prototype still exposes an older `skills/` plus `bundles/` workarea
+workflow. It contains reusable validation, Git, filesystem-safety, staging,
+rendering, drift, and target-installation code; it must not be mistaken for the
+accepted product model.
 
-The first slice:
+[ADR-0010](docs/decisions/ADR-0010-manifest-lockfile-skills-lifecycle.md)
+supersedes the former single-workarea decision. The migration is sequenced in the
+[implementation plan](docs/implementation-plan.md).
 
-- keeps the existing `Skill` and `Bundle` model;
-- manages one workarea selected with `--root` or `LSKILLS_ROOT`;
-- imports one existing bundle and its referenced skills from a local or Git origin;
-- records import provenance in `.lskills/provenance.toml`;
-- rejects collisions instead of merging or replacing content;
-- retains the existing validation and native publishing workflow.
+## Package shape
 
-The first slice does not implement multiple workareas, upstream synchronization,
-three-way merges, generic agent asset kinds, package registries, catalogs, or a new
-four-crate architecture.
-
-## Commands in the reduced target
+A one-skill package can keep `SKILL.md` at its root:
 
 ```text
-lskills import <origin> --root <workarea> --bundle <name> [--check]
-lskills list --root <workarea>
-lskills show <name> --root <workarea>
-lskills validate --root <workarea>
-lskills publish --root <workarea> [--check]
+review/
+  lskills.toml
+  SKILL.md
+  references/
 ```
 
-`install` and the other existing prototype commands remain available as reference
-and regression coverage, but are not expanded by the origin work.
+A package exporting several skills uses:
 
-`import` requires an explicit destination root. This prevents a mutating operation
-from accidentally writing into the lskills machinery repository.
+```text
+team-skills/
+  lskills.toml
+  skills/
+    review/SKILL.md
+    release/SKILL.md
+```
+
+A package may export local skills and depend on local or remote packages at the
+same time. Managed dependency materializations and native target directories are
+generated state, not editing locations.
+
+Managed dependency packages are generated state. Project dependencies materialize
+under `<project>/lskills_modules/`; global dependencies materialize under
+`${XDG_DATA_HOME:-$HOME/.local/share}/lskills/modules/`. Reusable downloaded Git or
+registry objects live under `${XDG_CACHE_HOME:-$HOME/.cache}/lskills/`.
 
 ## Repository layout
 
 ```text
 crates/
-  lskills-core/   current engine and the implementation base
-  lskills-cli/    command-line boundary
+  lskills-core/   lifecycle engine and reusable prototype mechanisms
+  lskills-cli/    command-line boundary and process tests
 
-docs/             active product, architecture, requirements, and plan
+docs/             product, requirements, architecture, specifications, and ADRs
 ```
 
-The current two-crate implementation is the foundation. A new domain/application/
-adapters workspace is intentionally deferred until the simple workflow proves it
-needs one.
+This repository contains machinery only. Production skills, user collections,
+credentials, caches, and persistent workareas do not belong here.
 
 ## Development
 
@@ -69,17 +88,18 @@ mise install
 mise run check
 ```
 
-Do not commit or push without explicit approval. Do not add production skills or
-user asset collections to this machinery repository. Tests use synthetic sources
-and temporary workareas.
+Do not commit or push without explicit approval.
 
-Read the active design in this order:
+## Design map
 
-1. [`AGENTS.md`](AGENTS.md) - contribution and safety rules;
-2. [`docs/product.md`](docs/product.md) - product boundary;
-3. [`docs/product-requirements.md`](docs/product-requirements.md) - MVP contract;
-4. [`docs/architecture.md`](docs/architecture.md) - current two-crate design;
-5. [`docs/domain-model.md`](docs/domain-model.md) - small domain model;
-6. [`docs/implementation-plan.md`](docs/implementation-plan.md) - execution plan;
-7. [`docs/cli-reference.md`](docs/cli-reference.md) - target command behavior;
-8. [`docs/decisions/ADR-0009-single-workarea-multi-origin-mvp.md`](docs/decisions/ADR-0009-single-workarea-multi-origin-mvp.md) - scope decision.
+Read active design documents in this order:
+
+1. [`docs/product.md`](docs/product.md) - product promises and boundaries;
+2. [`docs/product-requirements.md`](docs/product-requirements.md) - normative target requirements;
+3. [`GLOSSARY.md`](GLOSSARY.md) - canonical vocabulary;
+4. [`docs/domain-model.md`](docs/domain-model.md) - entities and invariants;
+5. [`docs/architecture.md`](docs/architecture.md) - component and transaction boundaries;
+6. [`docs/cli-reference.md`](docs/cli-reference.md) - target command behavior;
+7. [`docs/implementation-plan.md`](docs/implementation-plan.md) - phased migration;
+8. [`docs/decisions/ADR-0010-manifest-lockfile-skills-lifecycle.md`](docs/decisions/ADR-0010-manifest-lockfile-skills-lifecycle.md) - accepted direction;
+9. [`docs/research/microsoft-apm-leverage.md`](docs/research/microsoft-apm-leverage.md) - primary-source APM analysis.

@@ -1,55 +1,90 @@
-# Workarea Specification
+# Project and Global Scope Specification
 
-> Status: reduced MVP baseline
-> Prefixes: `ROOT`, `PROV`
+> Prefix: `SCOPE`
 
-## One workarea
+## Project discovery
 
-The MVP operates on one ordinary local skills-root per invocation:
+Project scope is the default. Starting at the current directory, lskills searches
+ancestors for `lskills.toml` and stops at the first match. The manifest directory
+is the base for local dependency paths, local skill paths, project targets, and the
+sibling `lskills.lock.toml`.
 
-```text
-<root>/
-  skills/
-  bundles/
-  .lskills/provenance.toml
-```
+`--project <path>` selects a manifest directory explicitly. It is an advanced path
+override, not a registered project or named workarea.
 
-`--root` is the destination selector. There is no named registry, default
-workarea, project workarea, workarea identity, workarea clone, or workarea refresh
-operation.
+## Global scope
 
-The operator may use normal Git commands to version the workarea. lskills does not
-commit, push, pull, or reset it.
-
-## Multiple origins
-
-The workarea can contain bundles from several origins. Each imported bundle has an
-independent provenance entry. The workarea itself is not an origin for its contents.
+`--global` or `-g` uses the XDG configuration root:
 
 ```text
-one workarea
-  bundle-a <- origin-a
-  bundle-b <- origin-b
+${XDG_CONFIG_HOME:-$HOME/.config}/lskills/lskills.toml
+${XDG_CONFIG_HOME:-$HOME/.config}/lskills/lskills.lock.toml
 ```
 
-## Import safety
+When `XDG_CONFIG_HOME` is set and non-empty, lskills must use
+`$XDG_CONFIG_HOME/lskills`. XDG directory variables must be absolute; a relative
+value is a configuration error rather than an alternate relative root.
 
-An import must:
+The global manifest has the same dependency syntax and lock semantics as a project
+manifest. It deploys only to targets with documented user-scope locations.
 
-1. require an explicit destination root;
-2. resolve one local or Git source;
-3. verify the source and destination roots are disjoint;
-4. validate one bundle and all referenced skills;
-5. check every destination collision before writing;
-6. stage the complete copy behind a recovery marker;
-7. install the bundle and member skills together;
-8. record provenance after success;
-9. recover interrupted placement before another workarea operation proceeds.
+The global and project graphs are independent. lskills never uses global packages
+to satisfy project dependencies. `lskills list --effective` may display what an
+agent can see across both scopes, while labeling the source scope of every skill.
 
-A failed import must not leave a partial selected bundle or successful provenance
-entry.
+## User configuration
 
-## Deferred
+Machine preferences live in:
 
-Multiple workareas, workarea Git synchronization, baselines, update state, and
-operation ledgers are not part of this specification.
+```text
+${XDG_CONFIG_HOME:-$HOME/.config}/lskills/config.toml
+```
+
+Suitable values include:
+
+- default targets;
+- Git transport preference;
+- package cache location;
+- registry aliases and URLs;
+- output and audit preferences.
+
+Dependency intent belongs in a scope manifest. Secrets come from environment
+variables or credential helpers.
+
+## Precedence
+
+For settings that admit every layer:
+
+```text
+CLI flag
+  > selected scope manifest
+  > user config
+  > target auto-detection
+  > built-in default
+```
+
+A lower layer cannot override an explicit higher-layer choice. Diagnostic output
+must identify the winning source for effective target and registry decisions.
+
+## Materialization and cache roots
+
+Downloaded and resolved package content has two layers:
+
+```text
+<project>/lskills_modules/                              # project materializations
+${XDG_DATA_HOME:-$HOME/.local/share}/lskills/modules/   # global materializations
+${XDG_CACHE_HOME:-$HOME/.cache}/lskills/                # shared downloads/cache
+```
+
+`lskills_modules/` is analogous to APM's `apm_modules/`: it contains generated,
+verified dependency packages for that project and can be reconstructed from
+`lskills.lock.toml`. Global materializations use the XDG data directory because
+package content is data, not configuration. The shared cache stores acquisition
+objects such as Git data and registry archives; it is not a scope's installed
+state.
+
+Project transaction state may live under `<project>/.lskills/`. Global lifecycle
+locks and staging use
+`${XDG_STATE_HOME:-$HOME/.local/state}/lskills/`. These paths are disposable
+implementation state except while an operation or recovery is active. Local
+source, manifests, and lockfiles never live in cache or staging directories.

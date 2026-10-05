@@ -1,140 +1,259 @@
 # lskills Product Requirements
 
-> Status: reduced MVP baseline
+> Status: target product contract
 
-These requirements describe the first useful workflow. The existing prototype code
-and tests are the implementation base; the requirements below constrain the new
-multi-origin import slice.
+## Vision
 
-## ROOT - One workarea
+### PROD-001 - Complete skill lifecycle (Must)
 
-### ROOT-001 - One explicit workarea (Must)
+lskills must support consuming, authoring, modifying, composing, and republishing
+Agent Skills through one coherent package lifecycle.
 
-Each invocation operates on one local skills-root. There is no workarea registry or
-implicit cross-workarea aggregation.
+### PROD-002 - Familiar package-manager behavior (Must)
 
-Acceptance:
+The primary workflow must follow established npm/Cargo/APM expectations:
 
-- `import` requires `--root <path>`;
-- source and destination roots are disjoint;
-- the destination contains `skills/`, `bundles/`, and `.lskills/` state;
-- an import never writes into the machinery repository or its origin by default.
+- a human-authored manifest;
+- a generated lockfile;
+- install as synchronization;
+- update as explicit freshness;
+- frozen replay for CI;
+- project and global scopes;
+- pack and publish as separate operations.
 
-### ROOT-002 - Ordinary local ownership (Must)
+Internal assembly directories must not appear as primary product concepts.
 
-The workarea remains an ordinary editable directory. lskills does not manage its
-Git remote, commits, pushes, or refresh policy.
+## Manifest and package
 
-## ORG - Origins
+### MAN-001 - TOML manifest (Must)
 
-### ORG-001 - Multiple origins in one workarea (Must)
+A package is rooted by `lskills.toml`. The manifest declares package metadata,
+dependencies, local skill exports, forks, target selection, and publication intent.
 
-A workarea may contain bundles imported from multiple local or Git skills-roots.
-Each import retains its own source provenance.
+### MAN-002 - Concise dependency references (Must)
 
-Acceptance:
+The common dependency form must be a single string, including Git shorthand,
+optional refs, repository subpaths, and local paths. Structured inline tables are
+reserved for skill subset selection, aliases, non-default sources, and other
+information that cannot be expressed safely in the string form.
 
-- two origins can contribute different bundles to one root;
-- the origin of each imported bundle remains inspectable;
-- one origin is not treated as the source of all workarea content;
-- a reused Git cache entry is verified against the requested origin and pinned
-  revision.
+### MAN-003 - One manifest for author and consumer roles (Must)
 
-### ORG-002 - Existing skills-root source contract (Must)
+A package may export local skills and consume dependency skills at the same time.
+A separate project type or workarea manifest is not required.
 
-The first source format is an existing root containing `skills/` and `bundles/`.
-An import selects one existing bundle and its referenced skills.
+### MAN-004 - Skill package shapes (Must)
 
-Standalone skill directories, archives, plugins, packages, and registries are
-later work.
+Support:
 
-### ORG-003 - Read-only source resolution (Must)
+- one root `SKILL.md` package;
+- a multi-skill `skills/<name>/SKILL.md` package;
+- local path packages;
+- repository subpath packages.
 
-Local and Git origins are read as source data. Source resolution must not edit the
-origin or execute source content.
+A publishable package must have stable name and version metadata.
 
-## IMP - Import
+## Resolution and lockfile
 
-### IMP-001 - Complete bundle import (Must)
+### LOCK-001 - TOML lockfile (Must)
 
-Import copies the selected bundle manifest and every referenced skill directory,
-including nested files, hidden files, bytes, and supported executable modes.
+`lskills.lock.toml` is generated and records the complete exact dependency graph,
+source coordinates, immutable revisions or versions, selected skills, content
+hashes, fork bases, and deployment ownership.
 
-### IMP-002 - Collision refusal (Must)
+### LOCK-002 - Install does not silently update (Must)
 
-If the destination bundle or any referenced skill already exists, the complete
-import fails before leaving a partial result. lskills does not merge, replace,
-namespace, or automatically rename content.
+A normal `lskills install` replays unchanged lock entries. New or changed manifest
+requirements are resolved; unchanged requirements retain their locked resolution.
 
-### IMP-003 - Preview is read-only (Must)
+### LOCK-003 - Explicit update (Must)
 
-`import --check` validates the source, reports the selected bundle and planned
-files, writes nothing to the workarea, and does not recover or remove staged
-transaction state.
+`lskills update` checks authoritative upstream state, presents a plan, and changes
+only selected or requested lock entries. `lskills outdated` reports freshness
+without writing.
 
-### IMP-004 - No execution (Must)
+### LOCK-004 - Frozen replay (Must)
 
-Import, validation, and publishing treat scripts, templates, binaries, and other
-source files as data. They do not execute imported content or package hooks.
+`lskills install --frozen` fails when the manifest, local source, selected skill
+set, or lockfile disagree. It never selects a new version or revision.
 
-## PROV - Provenance
+### LOCK-005 - Deterministic serialization (Must)
 
-### PROV-001 - Import provenance is durable (Must)
+The lockfile contains no volatile timestamps, uses canonical ordering, and remains
+byte-stable when semantic state has not changed.
 
-A successful import records a versioned provenance entry in:
+## Skills and composition
+
+### SKILL-001 - Cohesive skill directories (Must)
+
+A skill consists of `SKILL.md` and all regular files beneath its directory.
+Relative structure, bytes, and supported executable modes are preserved. The only
+content projection permitted is an explicitly declared installed-name alias, which
+rewrites the `SKILL.md` name deterministically and records source and projected
+hashes.
+
+### SKILL-002 - Explicit identity (Must)
+
+For `skills/<name>/`, `<name>` is the runtime identity. For root `SKILL.md`, the
+identity is the final segment of the declared package name. If frontmatter contains
+`name`, it must match that identity.
+
+### SKILL-003 - Selectable package exports (Must)
+
+A dependency may export one or many skills. Consumers may select a deterministic
+subset; omitted selection means every exported skill. The lockfile records the
+resolved subset.
+
+### SKILL-004 - Explicit composition (Must)
+
+A project composes local skills, forked skills, and selected dependency skills.
+Name collisions fail unless the manifest supplies an explicit alias or fork
+replacement. Declaration order must not silently choose a winner.
+
+## Modification and forks
+
+### FORK-001 - Dependencies are immutable inputs (Must)
+
+Managed dependency materializations and deployed target files are never the
+editable source of a durable customization.
+
+### FORK-002 - First-class fork workflow (Must)
+
+`lskills fork` copies one exact locked external skill into local package source,
+records its upstream package, skill, revision, and content hash, and explicitly
+replaces that external skill in the current project.
+
+### FORK-003 - Forks are normal publishable skills (Must)
+
+After promotion, the fork is ordinary local source. It can be renamed, edited,
+validated, composed, packed, and published under the current package identity.
+Its upstream relation remains inspectable provenance, not its runtime identity.
+
+### FORK-004 - Upstream comparison is explicit (Should)
+
+The CLI should compare a fork with its locked base and current upstream. Updating
+a fork's base must produce a plan and never overwrite local edits silently.
+
+## Scope and configuration
+
+### SCOPE-001 - Project scope by default (Must)
+
+Commands discover the nearest ancestor `lskills.toml`. Project deployment paths
+are resolved from that manifest directory.
+
+### SCOPE-002 - Independent XDG global scope (Must)
+
+`--global` operates on
+`${XDG_CONFIG_HOME:-$HOME/.config}/lskills/lskills.toml` and its sibling
+`lskills.lock.toml`. A set, non-empty `XDG_CONFIG_HOME` must be absolute and must be
+obeyed. Global operations never mutate the current project manifest.
+
+### SCOPE-003 - User configuration is separate (Must)
+
+`${XDG_CONFIG_HOME:-$HOME/.config}/lskills/config.toml` stores machine preferences
+such as default targets, transport, cache location, and registry aliases. It does
+not contain the global dependency set. Secrets are obtained from environment
+variables or credential helpers rather than tracked manifests or lockfiles.
+
+### SCOPE-004 - Deterministic precedence (Must)
+
+Effective settings use one documented precedence:
 
 ```text
-<root>/.lskills/provenance.toml
+CLI flag > scope manifest > user config > target auto-detection > built-in default
 ```
 
-The entry contains the destination bundle, source locator, source selector,
-resolved Git revision or local digest, and selected content digest.
+Global dependencies never implicitly enter a project lock graph.
 
-### PROV-002 - Provenance is not update state (Must)
+## Installation and targets
 
-Provenance records where content came from at import time. The MVP makes no claim
-that an imported bundle is current and does not implement refresh or reconciliation.
+### INST-001 - Scope-local materialization and native deployment (Must)
 
-## PUB - Existing workflow
+Project dependencies materialize under `<project>/lskills_modules/`. Global
+dependencies materialize under
+`${XDG_DATA_HOME:-$HOME/.local/share}/lskills/modules/`. lskills then deploys
+selected skills to the project- or user-scope directory each supported agent reads.
+Target adapters control placement only; they do not alter resolution or composed
+skill bytes.
 
-### PUB-001 - Existing validation remains usable (Must)
+### INST-002 - Atomic managed writes (Must)
 
-The assembled workarea can be loaded and validated using the existing validation
-workflow. A malformed bundle or skill fails closed.
+Deployment stages the complete desired target state before activation. A failed
+operation leaves the prior managed state usable.
 
-### PUB-002 - Existing publishing remains usable (Must)
+### INST-003 - Ownership-aware cleanup (Must)
 
-The existing deterministic `publish` workflow can render the assembled workarea.
-Import does not introduce a separate package, exporter, or catalog model.
+The lockfile records deployed paths, owners, and content hashes. Removal deletes
+only content still matching an lskills-owned record. User-modified or unowned
+content is retained and reported.
 
-## CLI and safety
+### INST-004 - Preview (Must)
 
-### CLI-001 - Stable context (Must)
+`--dry-run` reports resolution, selection, collision, and deployment changes
+without changing manifest, lockfile, cache-visible state, or target files.
 
-Import results identify the destination root, selected origin, bundle, revision or
-digest, and whether the operation was previewed or applied.
+### INST-005 - XDG cache isolation (Must)
 
-### CLI-002 - Stable errors (Must)
+Reusable downloads, Git objects, and registry archives are stored under
+`${XDG_CACHE_HOME:-$HOME/.cache}/lskills/`, independently of project and global
+materializations. Deleting the cache cannot delete authored source or invalidate a
+lockfile whose exact content can be fetched again.
 
-Usage errors, source errors, validation errors, collisions, and safety failures have
-stable error codes in JSON output and non-zero process status.
+## Packaging and publication
 
-### SEC-001 - Safe boundaries (Must)
+### PACK-001 - Deterministic bundle (Must)
 
-All source and destination paths are validated. Traversal, unsafe symlinks,
-special files, non-UTF-8 relative filenames, source/destination overlap, and writes
-outside declared roots are rejected. Git commands use argument APIs and never a
-shell.
+`lskills pack` emits a target-neutral, self-contained bundle from locked local,
+forked, and selected dependency skills. Repeated packing of identical inputs
+produces identical bytes.
 
-## Deferred requirements
+### PACK-002 - Exhaustive integrity manifest (Must)
 
-The MVP does not require:
+A bundle contains an exhaustive sorted file list and SHA-256 hashes. Installation
+rejects missing, extra, changed, traversing, symlinked, or unsupported special
+entries.
 
-- multiple named workareas;
-- workarea Git synchronization;
-- baselines, ledgers, or three-way updates;
-- merge, hold, ignore, detach, or refresh decisions;
-- generic asset kinds or adapter registries;
-- project manifests or additional target scopes;
-- package artifacts, native catalogs, or remote publication;
-- archives, package sources, hosted registries, or GitHub APIs.
+### PACK-003 - Provenance preservation (Must)
+
+The bundle records the source package, exact dependency resolutions, selected
+skills, and fork bases needed to explain every included skill.
+
+### PUB-001 - Immutable versions (Must)
+
+Publishing creates an immutable package version. Reusing an existing package
+name/version with different bytes fails.
+
+### PUB-002 - Separate discovery from storage (Should)
+
+A registry stores immutable bundle bytes and metadata. Optional catalogs provide
+curated discovery and point to immutable versions; catalogs are not trusted as
+content stores.
+
+## Validation, audit, and safety
+
+### SAFE-001 - Source content is data (Must)
+
+lskills never executes skill scripts, hooks, binaries, or package lifecycle
+commands during resolve, install, audit, pack, or publish.
+
+### SAFE-002 - Filesystem safety (Must)
+
+Reject traversal, absolute archive paths, unsafe symlinks, special files,
+non-UTF-8 package-relative paths, and writes outside owned roots.
+
+### SAFE-003 - Pre-deploy content scan (Must)
+
+All files selected for deployment are scanned before target writes for hidden
+Unicode and other configured content-policy findings. Scan and copy consume the
+same authorized file plan.
+
+### SAFE-004 - Audit and drift (Must)
+
+`lskills audit` verifies manifest-lock consistency, source hashes, selected skills,
+bundle integrity, deployment ownership, deployed-file hashes, and reproducibility
+through scratch replay.
+
+### CLI-001 - Stable machine output (Must)
+
+Commands support versioned JSON output and stable error codes for usage,
+resolution, integrity, collision, policy, safety, and I/O failures.

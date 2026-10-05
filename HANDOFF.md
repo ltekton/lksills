@@ -2,83 +2,71 @@
 
 ## Current state
 
-The repository is at commit `21536eb fix: harden single-workarea imports`, immediately after `57f82d5 feat: add single-workarea bundle imports`. The working tree was clean after the commit, and nothing was pushed.
+The target product has been reframed as a skills-focused package manager:
 
-The accepted product scope is the reduced two-crate MVP: one explicit local `--root` workarea, imports of one existing `Bundle` plus referenced `Skill` directories from local or Git origins, provenance-only metadata, collision refusal, validation, and existing native publishing. Do not revive the deferred four-crate rewrite or generic asset/update architecture.
+> lskills helps users consume, author, modify, compose, and republish Agent Skills
+> in a declarative, deterministic, reproducible workflow.
 
-The authoritative product/design details are already recorded in:
+ADR-0010 is the active decision. `lskills.toml` is authored intent;
+`lskills.lock.toml` is generated exact resolution and deployment state. Project
+and global scopes are independent. Acquired skills remain immutable until `fork`
+promotes an exact locked skill into editable local source with an upstream base.
+Packing produces a deterministic target-neutral bundle; publishing stores immutable
+versions.
 
-- `AGENTS.md`
-- `docs/product.md`
-- `docs/product-requirements.md`
-- `docs/architecture.md`
-- `docs/domain-model.md`
-- `docs/cli-reference.md`
-- `docs/security.md`
-- `docs/testing.md`
-- `docs/specs/`
-- `docs/implementation-plan.md`
-- `docs/decisions/ADR-0009-single-workarea-multi-origin-mvp.md`
+The current two-crate Rust implementation still implements the older
+single-workarea/import prototype. It has not yet been migrated. Keep both crates,
+reuse proven mechanisms, and avoid exposing old `Repo`, bundle-membership,
+`import --root`, or provenance-sidecar assumptions through new lifecycle APIs.
 
-Use those artifacts rather than restating or replacing them.
+## Completed in the design reframe
 
-## Completed in the latest commit
+Active or newly aligned documents include:
 
-The review-driven hardening included:
+- `README.md`, `AGENTS.md`, `GLOSSARY.md`, and `CHANGELOG.md`;
+- `docs/product.md` and `docs/product-requirements.md`;
+- `docs/domain-model.md` and `docs/architecture.md`;
+- `docs/cli-reference.md`, `docs/security.md`, and `docs/testing.md`;
+- `docs/specs/`;
+- `docs/implementation-plan.md`;
+- `docs/decisions/ADR-0010-manifest-lockfile-skills-lifecycle.md`;
+- `docs/research/microsoft-apm-leverage.md`.
 
-- exact-origin/reference Git cache keys and cache remote/pinned-commit verification;
-- source/destination overlap checks, including preflight checks before Git cache resolution;
-- required `skills/` and `bundles/` source directories;
-- rejection of symlinks, special files, and non-UTF-8 filenames across relevant source, workarea, and generated trees;
-- staged bundle placement with an internal `.lskills/staging` transaction marker, rollback, and recovery;
-- rollback error propagation rather than silent suppression;
-- strict provenance revision and complete SHA-256 digest format validation across import, inspection, validation, and publishing;
-- renderer protections against unsafe generated roots, symlinked parents, and non-regular destinations;
-- process and unit coverage for cache mismatch, overlap, recovery, provenance failures, machinery-repository isolation, and renderer safety;
-- aligned architecture, CLI, security, testing, ADR, and implementation-plan documentation.
+The APM analysis is pinned to commit
+`18c4c43c924ceae890fe0f2038806690e5b2d6c8`. It covers official consumer and
+producer documentation plus resolver, lockfile, source, staging, security,
+deployment-ledger, target, and integrity implementation.
 
-Relevant implementation areas include `crates/lskills-core/src/import.rs`, `remote.rs`, `provenance.rs`, `repo.rs`, `render.rs`, `drift.rs`, `publish.rs`, and CLI composition in `crates/lskills-cli/src/dispatch.rs`.
-
-## Verification
-
-The following passed before the commit:
-
-- `mise run check` - formatting, Clippy with warnings denied, and all workspace tests;
-- `git diff --check`;
-- import process suite: 20 tests;
-- core library tests: 66 tests;
-- guard suite: 15 tests;
-- remote suite: 6 tests.
-
-No manual acceptance run was performed after the commit. The ignored `SESSION-LEDGER.md` was updated with the current commit state.
+Post-design inspection identified reusable prototype code for frontmatter,
+validated names, safe paths and walks, Git argument handling and caching,
+deterministic hashing, transaction recovery, artifact maps, drift checks, native
+target paths, stable errors, and process tests. The detailed disposition is in
+`docs/implementation-plan.md`.
 
 ## Recommended continuation
 
-1. Run a manual acceptance pass against two local origins and one pinned Git origin. Inspect `import --check`, `.lskills/provenance.toml`, `validate`, `publish --check`, and generated output.
-2. Review remaining operational hardening opportunities:
-   - concurrent-import protection with a workarea lock or equivalent;
-   - fault-injection tests at staging, move, provenance-write, and cleanup boundaries;
-   - directory fsync and platform-specific atomic replacement behavior;
-   - explicit branch/tag cache refresh semantics.
-3. Improve user-facing examples and structured `import --check --json` output if needed.
-4. Only then decide whether a one-bundle refresh/update feature is warranted. If it is, write a new design decision first covering source revisions, local edits, overwrite/collision policy, and whether baselines or merges are required. Keep the currently deferred update/baseline/merge and multi-workarea features out of the MVP until explicitly authorized.
-5. Ask before creating any additional commit or pushing.
+Start Phase 1 of `docs/implementation-plan.md`:
 
-## Suggested skills
+1. specify strict versioned Rust codecs for `lskills.toml` and
+   `lskills.lock.toml`;
+2. add project discovery and global `ScopeContext`;
+3. support root and multi-skill local package shapes;
+4. consolidate one authorized portable file inventory and digest contract;
+5. resolve local path dependencies and write deterministic lockfiles;
+6. add frozen local replay and actual-binary process tests.
 
-For the next session, call the Skill tool for:
-
-- `code-review` - review changes after `21536eb` or assess the remaining safety gaps;
-- `tdd` - add fault-injection, recovery, and concurrency regression tests;
-- `codebase-design` - design an import lock or strengthen transaction boundaries;
-- `domain-modeling` - only if refresh/update state or provenance semantics are reconsidered;
-- `diagnosing-bugs` - if any crash-recovery, cache, or filesystem race is reproduced.
+Use TDD for persisted schemas and transaction behavior. Do not start Git updates,
+target deployment, forks, bundles, or registries before the preceding phase's
+completion evidence exists.
 
 ## Constraints
 
-- Keep only `crates/lskills-core` and `crates/lskills-cli`.
-- Use direct `cargo` commands through mise shims; do not prefix with `eval "$(mise env -s zsh)"`.
-- Keep production assets and user collections out of this machinery repository.
-- Imported content is data and must never be executed.
-- Do not commit or push without explicit approval for the specific action.
-- Redact credentials and personal data from any future notes or artifacts.
+- Keep `crates/lskills-core` and `crates/lskills-cli` until a concrete dependency
+  rule proves another crate is needed.
+- Use direct Cargo commands through mise shims.
+- Keep production skills, credentials, caches, global state, and user collections
+  out of this machinery repository.
+- Treat source content as data and never execute it.
+- Do not silently reinterpret old provenance as a replayable lockfile.
+- Do not remove prototype commands or formats without an approved migration.
+- Do not commit or push without explicit approval.

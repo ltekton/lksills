@@ -1,13 +1,19 @@
-# Legacy specification index
+# Specification index
 
-This file is retained as a pointer from the earlier skills-root prototype.
+Active focused specifications:
 
-The active specification is now the reduced single-workarea, multi-origin MVP:
+- [Acquisition and resolution](specs/acquisition.md)
+- [Local authoring and forks](specs/local-management.md)
+- [Project and global scope](specs/workareas.md)
+- [Upstream comparison and update](specs/upstream-coordination.md)
+- [Deterministic bundles](specs/packaging.md)
+- [Immutable publication](specs/publication.md)
 
-- [Active specifications](README.md);
-- [Acquisition](specs/acquisition.md);
-- [Workarea](specs/workareas.md);
-- [Implementation plan](implementation-plan.md).
+The normative cross-cutting requirements are in
+[`product-requirements.md`](product-requirements.md). Vocabulary and invariants are
+in [`domain-model.md`](domain-model.md), and implementation order is in
+[`implementation-plan.md`](implementation-plan.md).
 
-Earlier asset-first, multi-workarea, update, package, and publication design is
-superseded by [ADR-0009](decisions/ADR-0009-single-workarea-multi-origin-mvp.md).
+The `workareas.md` filename is retained to avoid breaking links. Its active
+content describes project and global scopes; workarea is no longer a user-facing
+product abstraction.

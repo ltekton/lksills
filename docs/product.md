@@ -1,117 +1,202 @@
 # lskills Product
 
-> Status: reduced MVP baseline
+## Product statement
 
-`lskills` assembles one local skills workarea from multiple origins and publishes
-the resulting collection to the agent targets already supported by the project.
+> lskills helps users consume, author, modify, compose, and republish Agent
+> Skills in a declarative, deterministic, reproducible workflow.
 
-## Product thesis
+lskills applies the package-manager model proven by npm, Cargo, and APM to a
+narrow domain: directories that implement the Agent Skills `SKILL.md` convention.
+It manages the install and integrity plane. Agent runtimes remain responsible for
+loading and executing skills.
 
-> **Bring skills from several trusted source repositories into one editable local
-> collection, then publish that collection consistently.**
+## Product promises
 
-The workarea is an ordinary local skills-root. lskills does not own a hosted
-registry, operate an agent runtime, or manage a network of synchronized copies.
+### Declarative by manifest
 
-## Core model
+A project records desired skills and targets in `lskills.toml`. Dependencies use
+concise references for the common case and structured TOML only when source,
+selection, or aliasing needs more detail.
 
-### Origin
+```toml
+schema = 1
+dependencies = [
+  "microsoft/apm-sample-package#v1.0.0",
+  "github/awesome-copilot/skills/review-and-refactor",
+  "./packages/team-skills",
+]
+targets = ["claude", "codex", "pi"]
 
-A read-only local directory or Git repository containing the existing skills-root
-layout:
+[package]
+name = "acme/my-skills"
+version = "1.0.0"
+private = true
+```
+
+The same manifest is the unit of authoring and consumption. A package may export
+local skills while depending on external packages.
+
+### Reproducible by lockfile
+
+`lskills.lock.toml` records exact Git commits or immutable registry versions,
+content hashes, dependency edges, selected skills, fork bases, and deployment
+ownership. A normal install replays locked state. `lskills install --frozen`
+fails rather than resolving new state.
+
+### Editable by promotion
+
+Installed dependencies are immutable managed inputs, not editing locations.
+`lskills fork` promotes one locked external skill into local source, records its
+exact upstream base, and makes the local skill the explicit replacement. The user
+can modify, test, pack, and publish it as part of a package under a new identity.
+
+### Portable by target
+
+A target maps selected standard skill directories to an agent's native project or
+user location. Target adapters control placement and native validation; they do not
+change dependency resolution or composed skill content. An explicit alias is
+applied earlier as a deterministic composition projection.
+
+### Safe by construction
+
+Resolution and deployment reject path traversal, unsafe links, special files,
+content-integrity failures, undeclared archive entries, and ambiguous output
+ownership. Source content is never executed by lskills. Security scanning occurs
+before deployment and again during audit.
+
+## User lifecycle
 
 ```text
-origin/
+init package
+  -> author local skills
+  -> install local or remote dependencies
+  -> lock exact sources and selected skills
+  -> deploy to project or global agent targets
+  -> fork selected external skills when modification is needed
+  -> validate and audit
+  -> pack a deterministic bundle
+  -> publish an immutable package release
+```
+
+Typical project use:
+
+```console
+lskills init
+lskills install microsoft/apm-sample-package#v1.0.0
+lskills install ./packages/my-local-skills
+lskills install
+lskills audit
+```
+
+Typical global use:
+
+```console
+lskills install --global acme/everyday-skills#^2.0
+lskills update --global
+```
+
+Typical producer use:
+
+```console
+lskills new skill incident-review
+lskills validate
+lskills pack
+lskills publish
+```
+
+Typical modification use:
+
+```console
+lskills fork microsoft/team-skills --skill review --as review
+# edit skills/review/
+lskills install
+lskills pack
+```
+
+## Project and global scope
+
+Project scope is the default. Commands search upward from the current directory
+for `lskills.toml`; its sibling `lskills.lock.toml` is the generated resolution.
+
+Global scope is selected with `--global`. Its authored and locked configuration is
+stored under the XDG configuration root:
+
+```text
+${XDG_CONFIG_HOME:-$HOME/.config}/lskills/lskills.toml
+${XDG_CONFIG_HOME:-$HOME/.config}/lskills/lskills.lock.toml
+${XDG_CONFIG_HOME:-$HOME/.config}/lskills/config.toml
+```
+
+A set, non-empty `XDG_CONFIG_HOME` must be an absolute path and is obeyed. Global
+dependencies are not injected into project resolution. Agent runtimes may naturally
+see both project and user skill directories, but a project remains reproducible
+without undeclared global state.
+
+## Dependency materialization
+
+Resolved dependency skills are copied into disposable, verified materialization
+roots analogous to APM's `apm_modules/`:
+
+```text
+<project>/lskills_modules/                                      # project scope
+${XDG_DATA_HOME:-$HOME/.local/share}/lskills/modules/           # global scope
+```
+
+Both contain only generated dependency packages and can be reconstructed from the
+scope lockfile. Local authored skills and forks remain under package source and are
+never edited in these directories.
+
+Downloaded archives, bare Git data, and other reusable acquisition objects are
+kept separately in:
+
+```text
+${XDG_CACHE_HOME:-$HOME/.cache}/lskills/
+```
+
+The cache may be shared by project and global operations, but each scope has its
+own materialization and lock graph.
+
+## Package shapes
+
+A one-skill package may place `SKILL.md` at its root:
+
+```text
+review/
+  lskills.toml
+  SKILL.md
+  references/
+```
+
+A multi-skill package uses:
+
+```text
+team-skills/
+  lskills.toml
   skills/
-  bundles/
+    review/SKILL.md
+    release/SKILL.md
 ```
 
-An origin may provide many bundles. A single import selects one bundle and its
-referenced skills.
+All files below a skill directory form one cohesive skill. lskills preserves those
+bytes and relative paths; it does not flatten a skill or reinterpret its body.
 
-### Workarea
+## Package versus bundle
 
-The one local `skills/` plus `bundles/` tree operated on by lskills:
+A package is editable source with a manifest. A bundle is the immutable result of
+`lskills pack`. Packing composes local, forked, and selected dependency skills from
+the lockfile into one target-neutral artifact with an exhaustive hash manifest.
+Publishing stores that artifact under an immutable package version.
 
-```text
-workarea/
-  skills/
-  bundles/
-  .lskills/provenance.toml
-```
+## Boundaries
 
-The workarea is selected explicitly with `--root` for imports. There is no registry
-of named workareas.
+lskills manages skills, not arbitrary agent assets. It does not define or execute:
 
-### Imported bundle
+- package lifecycle scripts;
+- agent hooks;
+- MCP or LSP servers;
+- shell commands;
+- model runtimes;
+- runtime authorization or sandboxing.
 
-An imported bundle is a normal local bundle and its referenced skill directories,
-plus a provenance entry. The local bundle and skills are the editable source for
-validation and publishing.
-
-## Workflow
-
-```text
-local/Git origin
-  -> select one bundle
-  -> validate
-  -> stage and copy bundle plus member skills
-  -> record source provenance
-  -> edit the one workarea normally
-  -> validate
-  -> publish
-```
-
-Import is provenance capture, not synchronization. The recorded revision or digest
-explains where content came from; it does not promise update checks.
-
-## MVP scope
-
-In scope:
-
-- one workarea;
-- multiple local or Git origins;
-- existing Skill and Bundle formats;
-- one-bundle-at-a-time import;
-- provenance sidecar;
-- collision refusal;
-- complete file and mode copying;
-- validation and existing native publishing;
-- stable human and JSON output;
-- safe, non-executing source handling.
-
-Deferred:
-
-- multiple workareas and workarea configuration;
-- upstream refresh and three-way reconciliation;
-- baselines and operation ledgers;
-- generic agent asset kinds;
-- package and catalog abstractions;
-- project manifests and new target adapters;
-- remote publication, commits, and pushes;
-- archives, registries, and hosted services.
-
-## Success criteria
-
-The first useful release is successful when an operator can:
-
-1. choose one explicit workarea;
-2. import a bundle from origin A;
-3. import a different bundle from origin B;
-4. see both origins in the workarea provenance record;
-5. reject a colliding import without partial writes;
-6. validate the assembled workarea; and
-7. publish the assembled collection using the existing renderer.
-
-## Vocabulary
-
-**Origin** - a read-only local or Git skills-root.
-
-**Workarea** - the one local `skills/` plus `bundles/` collection.
-
-**Imported bundle** - one bundle and its referenced skills copied from an origin.
-
-**Provenance** - source, selector, revision, and digest recorded at import time.
-
-**Publish** - the existing deterministic generation of native agent artifacts from
-the workarea.
+Those exclusions preserve the useful package-manager workflow while keeping the
+trust surface appropriate for a skills-focused tool.

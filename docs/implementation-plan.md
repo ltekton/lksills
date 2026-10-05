@@ -1,170 +1,289 @@
 # lskills Implementation Plan
 
-> Status: MVP complete after hardening pass
+> Status: target implementation sequence
 
-This plan implements one simple workflow: import bundles from multiple local or Git
-skills-roots into one workarea, then use the existing validation and publishing
-commands.
+This plan starts from the accepted product model in
+[ADR-0010](decisions/ADR-0010-manifest-lockfile-skills-lifecycle.md). The current
+workarea/import prototype is assessed for reusable code only; its persisted model
+and command surface do not set the target architecture.
 
-## 1. Scope lock
+## Delivery principles
 
-The MVP is deliberately limited to:
+- Ship vertical lifecycle slices, not an up-front crate rewrite.
+- Keep the existing `lskills-core` and `lskills-cli` boundary until a concrete
+  dependency rule requires another crate.
+- Build every mutating command around plan, authorize, stage, verify, activate,
+  record, and recover.
+- Define one authorized file inventory per operation. Scanning, hashing, copying,
+  packing, and reporting consume that inventory.
+- Make lock serialization deterministic before adding remote resolution.
+- Treat project and global scopes as the same engine with different roots.
+- Preserve existing commands until replacement behavior and migration are tested.
+  Compatibility code is temporary and must not leak old workarea concepts into new
+  domain interfaces.
 
-- one workarea selected with an explicit `--root` for import;
-- existing `Skill` and `Bundle` types;
-- one existing bundle per import;
-- local directories and Git skills-roots;
-- complete bundle/member-skill copying;
-- one provenance sidecar;
-- collision refusal;
-- existing validation and native publishing.
+## Existing-code assessment
 
-The following are deferred: multiple workareas, workarea Git management, baselines,
-updates, three-way comparison, generic asset types, package/catalog abstractions,
-project manifests, additional target scopes, and the four-crate rewrite.
+The prototype contains useful mechanisms, but most types are coupled to
+`skills/` plus `bundles/*.toml`. Reuse behavior, not accidental vocabulary.
 
-## 2. Current state
+| Existing area | Disposition | Target use |
+|---|---|---|
+| `frontmatter.rs`, `skillfile.rs` | Adapt | Parse and validate standard `SKILL.md`; expand only where the target skill contract requires it. |
+| `names.rs` | Adapt | Retain validated newtypes and stable diagnostics; replace bundle-prefix identity assumptions with package and skill identities. |
+| `path.rs`, `generate/walk.rs`, tree checks in `repo.rs` and `import.rs` | Consolidate | Form one portable-path and authorized-inventory module covering traversal, symlinks, special files, UTF-8 paths, bytes, and modes. |
+| `git.rs`, `remote.rs` | Adapt | Keep argument-based Git invocation, credential-helper compatibility, exact-commit checkout, and cache isolation. Replace `spec@ref` parsing with the documented requirement grammar and lock-aware cache policy. |
+| `import.rs` transaction marker, staging, copy, and digest routines | Extract | Reuse recovery, durable staging, mode-preserving copy, and deterministic hashing in the lifecycle transaction and materializer. Retire bundle-import orchestration. |
+| `provenance.rs` | Replace | Its source/revision/digest fields inform lock nodes, but `.lskills/provenance.toml` is not replay state and is not extended into the new lockfile. |
+| `repo.rs`, `model/bundle.rs`, `model/skill.rs` | Replace around retained parsers | Introduce `Package`, `Manifest`, `Requirement`, `Resolution`, `Composition`, and packed `Bundle`; do not preserve the old meaning of bundle. |
+| `validate.rs` | Adapt | Keep structured issues and relative-link checks; validate package shapes, manifest/lock agreement, exports, selections, forks, aliases, and targets. |
+| `render.rs`, `drift.rs`, `publish.rs` | Adapt and separate | Keep deterministic artifact maps and drift comparison. Split target deployment from deterministic bundle packing and registry publication. |
+| `install/target.rs`, `install/mod.rs` | Adapt | Retain native path knowledge and staged per-skill writes; add global/project symmetry, complete-operation activation, ownership receipts, and safe cleanup. |
+| `generate/*` | Selectively reuse | Preserve target-specific generation only where native agents require it. Standard skill directories should otherwise retain bytes and layout. |
+| `config.rs`, `root.rs`, `dirs.rs` | Replace/adapt | Implement upward `lskills.toml` discovery, XDG configuration/data/cache/state roots for global scope, separate user config, and documented precedence. Keep platform directory discovery as a low-level helper. |
+| `release.rs` | Adapt later | SemVer and plan/apply structure can support package versioning; automatic commits remain outside the lifecycle. |
+| CLI parsing, JSON output, process-test harness | Adapt | Keep the core/CLI error boundary and process tests; version every machine envelope and add structured context. |
 
-The current two-crate prototype already provides:
+The old `BundleName` prefix rule, `Repo` aggregate, `import --root` flow,
+`.lskills/provenance.toml`, and generated-root publication contract are migration
+inputs, not target abstractions.
 
-- validated names and frontmatter;
-- skills-root loading;
-- bundle validation;
-- local/Git source cache resolution;
-- deterministic rendering;
-- atomic per-skill installation;
-- process fixtures and regression tests.
+## Phase 0 - Design baseline
 
-The implementation should extend this code rather than replace its model.
+**Status:** complete when this documentation reframe is accepted.
 
-## 3. Phase 0 - Scope reset
+Deliverables:
 
-**Status:** complete after this documentation pass.
+- product statement and requirements;
+- domain vocabulary and target architecture;
+- TOML manifest and lockfile direction;
+- project/global command surface;
+- modification, bundle, publication, and security contracts;
+- ADR-0010 and the APM research record.
 
-### Required decisions
+Gate:
 
-- One workarea, no workarea registry.
-- One-bundle import, no generic asset detection.
-- Local and Git skills-root origins only.
-- Provenance at import time, no refresh/update claim.
-- Existing Skill/Bundle model and two-crate workspace.
-- Import collisions fail without merge, replacement, or rename.
-- `import` requires an explicit `--root`.
-- `publish` remains the native output path; generic packages and catalogs are out.
+- documentation has no active pointer that presents ADR-0009 as the target;
+- all relative Markdown links resolve;
+- unresolved format questions are identified rather than silently encoded.
 
-### Artifacts
-
-- `docs/decisions/ADR-0009-single-workarea-multi-origin-mvp.md`;
-- aligned product, requirements, architecture, domain, CLI, testing, and security docs;
-- superseded old M0 architecture decisions marked as historical.
-
-## 4. Phase 1 - Import and provenance
-
-**Status:** complete
-
-### Goal
-
-Import one existing bundle and all referenced skills from a local or Git origin into
-one explicit workarea without partial writes or source execution.
-
-### Implementation
-
-- Add a provenance record type and strict versioned TOML serialization.
-- Add `import <origin> --root <root> --bundle <name> [--check]`.
-- Resolve local origins through the existing `Repo::load` path.
-- Resolve Git origins through the existing `RepoSpec` and read-only cache.
-- Validate the source bundle and all referenced skills before writing.
-- Check destination bundle and skill collisions before staging.
-- Stage the complete selected bundle and skill directories under the destination.
-- Preserve nested files, hidden files, bytes, and supported modes.
-- Validate destination paths and reject unsafe symlinks and special files.
-- Write or replace the provenance sidecar only after the complete import succeeds.
-- Require explicit `--root` for every import mutation.
-- Keep `--check` fully read-only.
-
-### Tests
-
-- local origin with one bundle;
-- Git origin pinned to a revision;
-- two different origins imported into one workarea;
-- same bundle collision;
-- member skill collision;
-- malformed source and missing member;
-- nested files, hidden files, binary data, and executable-looking files;
-- traversal, symlink, and special-file rejection;
-- failed staging leaves no partial bundle or provenance success;
-- `--check` leaves source and workarea unchanged;
-- no imported content executes;
-- explicit root prevents writes to the machinery repository.
-
-### Definition of done
-
-- A local or Git source bundle can be imported into an empty temporary workarea.
-- A second origin can add another bundle to the same workarea.
-- Reopening the workarea recovers the imported content and provenance.
-- Collisions fail before partial writes.
-- Existing `validate`, `list`, and `show` can read the resulting workarea.
-- `mise run check` passes.
-
-## 5. Phase 2 - Existing workflow integration
-
-**Status:** complete
+## Phase 1 - Local package and deterministic lock kernel
 
 ### Goal
 
-Make provenance visible without changing the existing skills-root publishing model.
+Make one local package discoverable, validatable, lockable, and reproducible
+without network access or target deployment.
 
-### Implementation
+### Implement
 
-- Add provenance summaries to `list` and `show` where useful.
-- Validate provenance records for malformed or dangling bundle entries.
-- Keep `validate` as the workarea integrity gate.
-- Keep `publish [--check]` as the native output operation.
-- Document that `install`, scaffolding, release, tokens, hygiene, doctor, and
-  catalog remain prototype behavior outside the new import contract.
-- Validate Git cache identity and pinned revisions before reuse.
-- Reject source/destination overlap and missing source layout directories.
-- Validate regular-file and directory kinds, non-UTF-8 filenames, and provenance
-  semantics across import, inspection, validation, and publishing.
-- Recover interrupted staged imports using an internal transaction marker.
-- Preserve a clean machinery repository through explicit-root process coverage.
+1. Define strict versioned codecs for `lskills.toml` and `lskills.lock.toml`.
+2. Add project discovery and global scope roots using one `ScopeContext`: XDG
+   configuration for manifests, XDG data for materializations, XDG cache for
+   reusable downloads, and XDG state for lifecycle locks and staging.
+3. Materialize project dependencies under `<project>/lskills_modules/` and global
+   dependencies under the XDG data root.
+4. Support root-skill and `skills/<name>/` package shapes.
+5. Build the authorized skill-file inventory and canonical SHA-256 contract.
+6. Resolve local path package dependencies, including transitive manifests and
+   cycle/conflict diagnostics.
+7. Implement deterministic lock generation, semantic-manifest digesting, atomic
+   lock writes, `lock --check`, and frozen local replay.
+8. Implement `init`, `new skill`, and target-independent `validate` against the
+   new package model.
+9. Keep old commands behind their existing paths until replacement coverage is
+   present; do not make new models parse `.lskills/provenance.toml` implicitly.
 
-### Hardening evidence
+### Evidence
 
-The final implementation also covers cache identity, root overlap, special-file and
-filename safety, provenance enforcement on publishing, interrupted transaction
-recovery, and machinery-repository isolation. These are tested in the process suite
-and core unit tests.
+- equivalent manifests serialize to one canonical lockfile;
+- unchanged `install`/`lock` planning leaves lock bytes untouched;
+- local dependency edits are detected in frozen mode;
+- root and multi-skill fixtures resolve identically from project and global
+  contexts;
+- cycles, identity conflicts, selection errors, path escapes, links, special
+  files, and non-UTF-8 paths fail with stable codes.
 
-### Definition of done
+## Phase 2 - Git acquisition and graph resolution
 
-- Two origins can be assembled, inspected, validated, and published from one root.
-- Provenance is visible and does not alter generated native artifacts.
-- Existing regression tests remain active.
-- The machinery repository remains unchanged during tests.
-- `mise run check` passes.
+### Goal
 
-## 6. Evidence and gates
+Resolve concise Git references and transitive package dependencies to exact,
+replayable content.
 
-Run after each implementation phase:
+### Implement
+
+1. Parse and canonicalize shorthand, full URL, ref, and repository-subpath
+   requirements without conflating `@` in transport syntax with version syntax.
+2. Separate source adapters from graph resolution and package loading.
+3. Resolve symbolic refs to exact commits; lock canonical source coordinates,
+   requested refs, package subpaths, and package/skill hashes.
+4. Materialize into content-addressed or exact-resolution cache entries outside
+   project source.
+5. Reuse unchanged locked nodes during normal install; change them only for a
+   changed requirement or explicit update.
+6. Add offline and frozen behavior, parent-linked conflict explanations, and
+   `why` data.
+7. Scan the authorized file plan before any deployment-capable state is accepted.
+
+### Evidence
+
+- hermetic temporary Git repositories cover branches, tags, SHAs, subpaths,
+  transitive edges, cycles, and conflicting immutable requirements;
+- frozen replay works after moving the project and with network access disabled
+  when exact content is cached;
+- cache identity cannot substitute content from another origin;
+- credentials and credential-bearing URLs never enter diagnostics or lockfiles.
+
+## Phase 3 - Composition and transactional deployment
+
+### Goal
+
+Synchronize a collision-free composition to native project and global targets
+without losing prior valid state.
+
+### Implement
+
+1. Compose local and selected dependency skills with explicit aliases and
+   deterministic collision failures.
+2. Turn current target path logic into small adapters for Claude, Codex, and Pi.
+3. Compute a complete deployment plan before writes.
+4. Add a scope lifecycle lock, destination-filesystem staging, transaction
+   recovery, and complete-operation activation.
+5. Record canonical ownership rows and deployed-file hashes in the lockfile.
+6. Reconcile stale output only when ownership and current hashes authorize
+   deletion; retain and report edited or unowned content.
+7. Implement `install`, `uninstall`, `list`, `view`, `why`, `audit`, and dry-run
+   behavior for both scopes.
+
+### Evidence
+
+- project and global graphs remain independent;
+- a fault at each mutation boundary leaves either prior or next complete managed
+  state and is recoverable on the next mutation;
+- concurrent mutations serialize before their first state read;
+- dry-run writes no manifest, lock, cache-visible, staging, or target state;
+- uninstall never deletes edited, shared, malformed, or unowned output;
+- scratch replay produces the same target artifact map.
+
+This is the first complete consumer milestone.
+
+## Phase 4 - Update and freshness
+
+### Goal
+
+Make upstream change explicit and auditable without changing normal install
+semantics.
+
+### Implement
+
+- `outdated` as a read-only authoritative-source query;
+- selected and whole-graph `update` planning;
+- confirmation and `--yes` behavior;
+- added, changed, removed, and unchanged node/deployment reporting;
+- atomic lock and deployment transition using the Phase 3 protocol.
+
+### Evidence
+
+- normal install remains stable after an upstream branch moves;
+- update changes only requested nodes plus necessary transitive consequences;
+- an update failure preserves the prior lock and deployment;
+- offline and frozen modes perform no freshness queries.
+
+## Phase 5 - Fork and local modification
+
+### Goal
+
+Promote an exact external skill into durable editable source with explainable
+upstream provenance.
+
+### Implement
+
+1. Resolve the requested source skill from the current lock.
+2. Plan copy, local identity, export, and replacement changes together.
+3. Copy the exact locked tree into `skills/<local-name>/` transactionally.
+4. Write the manifest fork declaration and lock base record atomically.
+5. Make the local fork an explicit composition replacement.
+6. Implement diff against the locked base and current upstream. Defer automatic
+   rebase until conflict semantics are separately accepted.
+
+### Evidence
+
+- deleting all caches does not affect editable fork source;
+- the base package, commit/version, source skill, and tree hash remain inspectable;
+- fork creation never mutates dependency materialization or target output;
+- destination collisions fail without partial manifest or source changes;
+- upstream updates never overwrite local edits.
+
+## Phase 6 - Deterministic bundles
+
+### Goal
+
+Pack and verify a self-contained, target-neutral artifact from one locked
+composition.
+
+### Implement
+
+- specify the bundle directory and normalized archive formats;
+- embed package metadata, exact resolved graph, skill provenance, fork bases, and
+  exhaustive sorted file hashes;
+- normalize archive order, timestamps, ownership metadata, path separators, and
+  supported modes;
+- reject missing, extra, changed, linked, special, absolute, or traversing entries;
+- implement `pack`, `verify`, and archive install through the same inventory and
+  resolution interfaces.
+
+### Evidence
+
+- repeated pack operations over identical input are byte-identical;
+- verification fails for every inventory and path mutation class;
+- a bundle installs without contacting original Git sources;
+- unpacked content reproduces the same skill hashes and provenance.
+
+## Phase 7 - Immutable publication
+
+### Goal
+
+Publish verified bundles under immutable package versions.
+
+Before implementation, accept a registry protocol decision covering namespace,
+authentication, upload finalization, immutability, metadata, and yanking. Then:
+
+- implement one registry adapter, not a speculative registry framework;
+- validate and pack before upload;
+- refuse private packages and version-byte replacement;
+- keep credentials in environment or credential-helper boundaries;
+- treat catalogs as optional discovery metadata, not package storage.
+
+Evidence includes a hermetic registry fixture, interrupted-upload behavior,
+immutable-version conflicts, credential redaction, and install of the published
+artifact by digest.
+
+## Migration from the prototype
+
+Do not silently reinterpret old state. Before removing prototype commands:
+
+1. inventory the old `skills/`, `bundles/*.toml`, `.lskills.toml`, and
+   `.lskills/provenance.toml` shapes encountered in fixtures;
+2. specify a one-way, previewable migration into package manifest, local exports,
+   dependencies or forks, and lock records;
+3. state which provenance can be preserved exactly and which cannot establish a
+   replayable lock;
+4. run old and new corpus fixtures through the migration;
+5. remove old command paths only after explicit approval and release notes.
+
+ADR-0009 remains a historical description of the implemented prototype. It does
+not constrain new interfaces.
+
+## Continuous gates
+
+Run the narrowest relevant tests during each phase and the repository gate before
+claiming completion:
 
 ```sh
 mise run check
-cargo test -p lskills-cli --test import
-cargo test -p lskills-cli --test corpus
+git diff --check
 ```
 
-Before declaring the MVP complete, run the actual binary against temporary local
-and Git origins and inspect:
-
-- the selected bundle and member skills;
-- the provenance sidecar;
-- collision behavior;
-- generated publish output;
-- the machinery repository status.
-
-## 7. Later, only if needed
-
-Possible later work includes explicit refresh, baselines, multiple workareas,
-standalone Agent Skills sources, additional formats, user-scope targets, package
-artifacts, and remote publication. None is a prerequisite for this MVP.
+Also run Markdown link validation whenever documentation changes. A phase is done
+only when the actual binary has been exercised against isolated temporary
+projects and its persisted artifacts have been inspected.

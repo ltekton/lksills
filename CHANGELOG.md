@@ -6,19 +6,26 @@ All notable changes to `lskills` are documented here.
 
 ### Design
 
-- Reduced the first implementation to one local skills workarea assembled from
-  multiple local or Git origins.
-- Chosen the existing `Skill`/`Bundle` model and two-crate implementation as the
-  MVP foundation.
-- Added one-bundle import with strict provenance and collision refusal.
-- Deferred multiple workareas, update coordination, generic assets, package/catalog
-  abstractions, remote publication, and the four-crate rewrite.
+- Reframed lskills as a skills-focused package manager for consuming, authoring,
+  modifying, composing, and republishing Agent Skills.
+- Chose `lskills.toml` for authored intent and `lskills.lock.toml` for exact
+  resolution, integrity, fork-base, and deployment state.
+- Defined normal locked install, explicit update, frozen replay, independent
+  project/global scopes, deterministic bundles, immutable publication, and a
+  first-class fork-to-local-source workflow.
+- Added ADR-0010, which supersedes the single-workarea/import MVP as the active
+  product and target-architecture decision.
+- Added pinned Microsoft APM research and a phased migration/reuse assessment.
 
-### Implementation
+### Current prototype implementation
 
-- Implemented local and pinned Git-origin bundle import with staged copying,
-  provenance summaries, collision refusal, and read-only preview mode.
-- Existing skills-root behavior remains covered by the prototype test suite.
+- Supports local and pinned Git-origin bundle import into an explicit workarea,
+  with staged copying, provenance summaries, collision refusal, and read-only
+  preview mode.
+- Retains validation, rendering, native target installation, and related process
+  coverage from the skills-root prototype.
+- This behavior remains available during migration but is not the target product
+  model.
 
 ## Prototype history
 

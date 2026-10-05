@@ -1,39 +1,53 @@
 # lskills Design Documents
 
-The active design is intentionally small: one local skills workarea, multiple
-local or Git origins, and the existing Skill/Bundle publishing workflow.
+The active design treats lskills as a skills-focused package manager. It is guided
+by one product statement:
+
+> lskills helps users consume, author, modify, compose, and republish Agent
+> Skills in a declarative, deterministic, reproducible workflow.
 
 ## Start here
 
-1. [Product](product.md) - product boundary and workflow;
-2. [Product requirements](product-requirements.md) - MVP contract;
-3. [Architecture](architecture.md) - current two-crate design;
-4. [Domain model](domain-model.md) - origins, workarea, bundles, and provenance;
-5. [Implementation plan](implementation-plan.md) - two implementation phases;
-6. [CLI reference](cli-reference.md) - target import and existing workflow;
-7. [ADR-0009](decisions/ADR-0009-single-workarea-multi-origin-mvp.md) - scope decision.
+1. [Product](product.md) - product goal, promises, and lifecycle;
+2. [Product requirements](product-requirements.md) - normative target behavior;
+3. [Domain model](domain-model.md) - package, skill, requirement, lock, fork, and bundle;
+4. [Architecture](architecture.md) - deep modules and lifecycle data flow;
+5. [CLI reference](cli-reference.md) - npm/APM-shaped command surface;
+6. [Security](security.md) - trust boundaries and required controls;
+7. [Implementation plan](implementation-plan.md) - migration from the current prototype;
+8. [ADR-0010](decisions/ADR-0010-manifest-lockfile-skills-lifecycle.md) - reframe decision.
 
-## Specifications
+The canonical vocabulary is in [`../GLOSSARY.md`](../GLOSSARY.md).
 
-- [Workarea](specs/workareas.md) - one explicit local workarea;
-- [Acquisition](specs/acquisition.md) - importing one bundle from one origin;
-- [Local management](specs/local-management.md) - existing validation and publishing;
-- [Testing](testing.md) - test strategy;
-- [Security](security.md) - safety controls.
+## Focused specifications
 
-The upstream, packaging, and publication specifications are retained as deferred
-history. The existing `publish` command is a concrete renderer, not a new generic
-package/publication subsystem.
+- [Project and global scope](specs/workareas.md);
+- [Dependency resolution and installation](specs/acquisition.md);
+- [Authoring, forks, and deployment](specs/local-management.md);
+- [Update and upstream coordination](specs/upstream-coordination.md);
+- [Packing](specs/packaging.md);
+- [Publication](specs/publication.md);
+- [Testing](testing.md).
 
-## Superseded design
+## Research basis
 
-The earlier multi-workarea, asset-first, baseline, update, package, and publication
-architecture was intentionally superseded by ADR-0009. The old ADR files remain for
-history, but they are not implementation requirements for this MVP.
+- [Microsoft APM analysis and lskills adaptations](research/microsoft-apm-leverage.md).
+
+The APM research is pinned to a specific upstream revision. APM provides the
+manifest/lock/install/update/audit/package-manager baseline; lskills narrows the
+domain to skills and adds first-class fork-to-local-source behavior.
+
+## Historical decisions
+
+ADRs 0001-0009 describe earlier designs and implementation scope reductions. They
+remain historical context. ADR-0010 supersedes them as the active product and
+target-architecture decision.
 
 ## Conventions
 
-- The machinery repository contains no production skills or user workareas.
-- Examples are synthetic unless explicitly marked otherwise.
-- Imported content is data and is never executed.
-- No command commits, pushes, or publishes remotely as a hidden side effect.
+- `lskills.toml` is human-authored intent.
+- `lskills.lock.toml` is generated exact resolution and deployment state.
+- Project scope is the default; `--global` selects independent user state.
+- Internal cache, staging, and assembly paths are not product concepts.
+- Skill resources are data and are never executed by lskills.
+- No command commits or pushes source control as a hidden side effect.
